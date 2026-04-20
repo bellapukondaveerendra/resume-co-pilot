@@ -92,7 +92,6 @@ function TabBar({ options, value, onChange, disabledValues = [] }) {
   );
 }
 
-// Underline-style tab — still used by GuestPage results
 function RightTab({ label, active, onClick, dot }) {
   return (
     <button
@@ -141,13 +140,12 @@ function CopyBtn({ text }) {
   );
 }
 
-// ── Apply edit to resume (for EDIT and DELETE cards) ──────────────────────────
+// ── Apply edit to resume ───────────────────────────────────────────────────────
 function applyEditToResume(resume, edit) {
-  const norm = (s) => (s || "").trim().toLowerCase();
+  const norm    = (s) => (s || "").trim().toLowerCase();
   const matches = (a, b) => {
     const na = norm(a), nb = norm(b);
     if (!na || !nb) return false;
-    // First 70 chars as a fuzzy prefix — tolerates minor trailing differences
     return na.includes(nb.slice(0, 70)) || nb.includes(na.slice(0, 70));
   };
   const clone = JSON.parse(JSON.stringify(resume));
@@ -161,7 +159,7 @@ function applyEditToResume(resume, edit) {
       const i = p.points.findIndex((pt) => matches(pt, edit.from));
       if (i !== -1) { p.points[i] = edit.to; return clone; }
     }
-    return null; // bullet not found in resume
+    return null;
   }
 
   if (edit.type === "DELETE") {
@@ -176,7 +174,7 @@ function applyEditToResume(resume, edit) {
     return null;
   }
 
-  return null; // ADD — copy only, no auto-target
+  return null;
 }
 
 // ── Analysis UI components ────────────────────────────────────────────────────
@@ -200,9 +198,9 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
     EDIT:   { bg: "#EFF6FF", border: "#3B82F6", badge: "#2563EB" },
     DELETE: { bg: "#FEF2F2", border: "#EF4444", badge: "#DC2626" },
   };
-  const c = C[edit.type] || C.ADD;
-  const copyText  = edit.type === "EDIT" ? edit.to : edit.statement;
-  const canApply  = editorAvailable && (edit.type === "EDIT" || edit.type === "DELETE");
+  const c        = C[edit.type] || C.ADD;
+  const copyText = edit.type === "EDIT" ? edit.to : edit.statement;
+  const canApply = editorAvailable && (edit.type === "EDIT" || edit.type === "DELETE");
 
   const handleApply = () => {
     const ok = onApply();
@@ -237,8 +235,8 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
         </div>
       </div>
 
-      {edit.type === "ADD"    && <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.statement}</p>}
-      {edit.type === "EDIT"   && (
+      {edit.type === "ADD"  && <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.statement}</p>}
+      {edit.type === "EDIT" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           <p style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.5, margin: 0, textDecoration: "line-through", fontStyle: "italic" }}>{edit.from}</p>
           <div style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
@@ -371,7 +369,178 @@ function Spinner({ label }) {
   );
 }
 
-// ── JobInputForm (used in GuestPage) ──────────────────────────────────────────
+// ── BuyCreditsModal ───────────────────────────────────────────────────────────
+function BuyCreditsModal({ auth, onClose }) {
+  const [loadingPkg, setLoadingPkg] = useState(null);
+
+  const packages = [
+    { key: "starter", label: "Starter",   credits: 5,  price: "$2.50",  perAnalysis: "$0.50/analysis" },
+    { key: "pro",     label: "Pro",        credits: 15, price: "$6.00",  perAnalysis: "$0.40/analysis" },
+    { key: "power",   label: "Power",      credits: 40, price: "$14.00", perAnalysis: "$0.35/analysis", best: true },
+  ];
+
+  const handleBuy = async (pkg) => {
+    setLoadingPkg(pkg);
+    try {
+      const data = await api.checkout(pkg, auth.token);
+      window.location.href = data.url;
+    } catch (err) {
+      console.error("Checkout error:", err.message);
+      setLoadingPkg(null);
+    }
+  };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 28, maxWidth: 580, width: "100%", display: "flex", flexDirection: "column", gap: 22, boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <h3 style={{ fontSize: 18, fontWeight: 700, color: "#111827", marginBottom: 3 }}>Buy Credits</h3>
+            <p style={{ fontSize: 13, color: "#6B7280", margin: 0 }}>Each analysis costs 1 credit.</p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", color: "#9CA3AF", cursor: "pointer", fontSize: 22, lineHeight: 1, padding: "2px 6px" }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          {packages.map((pkg) => {
+            const isLoading = loadingPkg === pkg.key;
+            return (
+              <div
+                key={pkg.key}
+                style={{
+                  border: pkg.best ? "2px solid #2563EB" : "1px solid #E5E7EB",
+                  borderRadius: 12, padding: "18px 14px",
+                  display: "flex", flexDirection: "column", gap: 8,
+                  position: "relative", background: pkg.best ? "#EFF6FF" : "#FFFFFF",
+                }}
+              >
+                {pkg.best && (
+                  <div style={{ position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)", background: "#2563EB", color: "#FFFFFF", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 10px", borderRadius: 10, whiteSpace: "nowrap" }}>
+                    Best Value
+                  </div>
+                )}
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827" }}>{pkg.label}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#2563EB", fontFamily: "'Space Mono',monospace" }}>{pkg.credits}</div>
+                <div style={{ fontSize: 11, color: "#6B7280" }}>credits</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>{pkg.price}</div>
+                <div style={{ fontSize: 11, color: "#9CA3AF" }}>{pkg.perAnalysis}</div>
+                <button
+                  onClick={() => !loadingPkg && handleBuy(pkg.key)}
+                  disabled={!!loadingPkg}
+                  style={{
+                    marginTop: 6,
+                    background: pkg.best ? "#2563EB" : "#EFF6FF",
+                    border: pkg.best ? "none" : "1px solid #BFDBFE",
+                    color: pkg.best ? "#FFFFFF" : "#2563EB",
+                    borderRadius: 8, padding: "9px 0", fontSize: 12, fontWeight: 700,
+                    cursor: loadingPkg ? "not-allowed" : "pointer",
+                    fontFamily: "'Roboto',sans-serif",
+                    opacity: loadingPkg && !isLoading ? 0.5 : 1,
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                  }}
+                >
+                  {isLoading ? (
+                    <>
+                      <span style={{ width: 12, height: 12, borderRadius: "50%", border: "2px solid transparent", borderTop: `2px solid ${pkg.best ? "#FFFFFF" : "#2563EB"}`, animation: "spin 0.8s linear infinite", display: "inline-block" }} />
+                      Loading…
+                    </>
+                  ) : pkg.best ? "Buy →  ✓" : "Buy →"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        <p style={{ fontSize: 11, color: "#9CA3AF", textAlign: "center", margin: 0 }}>
+          Secure payment via Stripe. Credits never expire.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── CreditsBadge ──────────────────────────────────────────────────────────────
+function CreditsBadge({ balance, onOpenModal }) {
+  if (balance === null) return null;
+
+  const isEmpty = balance === 0;
+  const isLow   = balance === 1;
+  const color   = isEmpty ? "#DC2626" : isLow ? "#D97706" : "#374151";
+  const bg      = isEmpty ? "#FEF2F2" : isLow ? "#FEF3C7" : "#F3F4F6";
+  const border  = isEmpty ? "#FECACA" : isLow ? "#FDE68A" : "#E5E7EB";
+
+  return (
+    <button
+      onClick={onOpenModal}
+      title={isLow ? "1 credit left" : undefined}
+      style={{
+        background: bg, border: `1px solid ${border}`, borderRadius: 20,
+        padding: "4px 12px", fontSize: 12, fontWeight: 600, color,
+        cursor: "pointer", fontFamily: "'Roboto',sans-serif",
+        display: "flex", alignItems: "center", gap: 5,
+      }}
+    >
+      ⚡ {isEmpty ? "Buy credits" : `${balance} credit${balance === 1 ? "" : "s"}`}
+    </button>
+  );
+}
+
+// ── Credits success / cancel pages ────────────────────────────────────────────
+function CreditsSuccessPage({ onGoEditor, onCreditsFetched, auth }) {
+  const [countdown, setCountdown] = useState(3);
+
+  useEffect(() => {
+    if (auth?.token) {
+      api.getCredits(auth.token)
+        .then((data) => { if (onCreditsFetched) onCreditsFetched(data.balance); })
+        .catch(() => {});
+    }
+    const interval = setInterval(() => {
+      setCountdown((n) => {
+        if (n <= 1) { clearInterval(interval); onGoEditor(); return 0; }
+        return n - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div style={{ maxWidth: 480, margin: "0 auto", padding: "100px 20px", textAlign: "center" }}>
+      <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#ECFDF5", border: "2px solid #6EE7B7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, margin: "0 auto 20px" }}>
+        ✓
+      </div>
+      <h1 style={{ fontSize: 26, fontWeight: 700, color: "#111827", marginBottom: 8 }}>Credits added!</h1>
+      <p style={{ color: "#6B7280", fontSize: 15, lineHeight: 1.6, marginBottom: 24 }}>Your balance has been updated.</p>
+      <p style={{ color: "#9CA3AF", fontSize: 13 }}>Redirecting in {countdown}s…</p>
+    </div>
+  );
+}
+
+function CreditsCancelPage({ onGoEditor }) {
+  return (
+    <div style={{ maxWidth: 480, margin: "0 auto", padding: "100px 20px", textAlign: "center" }}>
+      <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#F3F4F6", border: "2px solid #E5E7EB", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, margin: "0 auto 20px" }}>
+        ✕
+      </div>
+      <h1 style={{ fontSize: 26, fontWeight: 700, color: "#111827", marginBottom: 8 }}>Payment cancelled</h1>
+      <p style={{ color: "#6B7280", fontSize: 15, marginBottom: 28 }}>No charges were made.</p>
+      <PrimaryBtn onClick={onGoEditor} style={{ padding: "10px 28px" }}>Back to Editor</PrimaryBtn>
+    </div>
+  );
+}
+
+// ── JobInputForm ──────────────────────────────────────────────────────────────
 function JobInputForm({ onAnalyze, loading }) {
   const [jobInput, setJobInput] = useState("");
   const [inputMode, setInputMode] = useState("paste");
@@ -413,7 +582,7 @@ function JobInputForm({ onAnalyze, loading }) {
   );
 }
 
-// ── Home page ──────────────────────────────────────────────────────────────────
+// ── Home page ─────────────────────────────────────────────────────────────────
 function HomePage({ onGuest, onLogin, auth, onGoEditor }) {
   return (
     <div style={{ maxWidth: 680, margin: "0 auto", padding: "60px 20px" }}>
@@ -448,15 +617,16 @@ function HomePage({ onGuest, onLogin, auth, onGoEditor }) {
   );
 }
 
-// ── Guest page ─────────────────────────────────────────────────────────────────
+// ── Guest page ────────────────────────────────────────────────────────────────
 function GuestPage({ onBack, onSignUp }) {
-  const [step, setStep]             = useState("input");
-  const [resumeMode, setResumeMode] = useState("upload");
-  const [resumeFile, setResumeFile] = useState(null);
-  const [resumeText, setResumeText] = useState("");
-  const [analysis, setAnalysis]     = useState(null);
-  const [guestTab, setGuestTab]     = useState("analysis");
-  const [error, setError]           = useState("");
+  const [step, setStep]                     = useState("input");
+  const [resumeMode, setResumeMode]         = useState("upload");
+  const [resumeFile, setResumeFile]         = useState(null);
+  const [resumeText, setResumeText]         = useState("");
+  const [analysis, setAnalysis]             = useState(null);
+  const [guestTab, setGuestTab]             = useState("analysis");
+  const [error, setError]                   = useState("");
+  const [guestLimitReached, setGuestLimitReached] = useState(false);
   const fileRef = useRef();
 
   const inputStyle = { width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "12px 16px", outline: "none", boxSizing: "border-box" };
@@ -471,7 +641,7 @@ function GuestPage({ onBack, onSignUp }) {
   };
 
   const handleAnalyze = async (jobInput, inputMode) => {
-    setError("");
+    setError(""); setGuestLimitReached(false);
     let text = resumeText.trim();
     if (resumeMode === "upload") {
       if (!resumeFile) { setError("Please upload a resume file."); return; }
@@ -485,7 +655,14 @@ function GuestPage({ onBack, onSignUp }) {
     try {
       const data = await api.analyze(text, jobInput, inputMode, null);
       setAnalysis(data); setGuestTab("analysis"); setStep("results");
-    } catch (err) { setError("Analysis failed: " + err.message); setStep("input"); }
+    } catch (err) {
+      if (err.code === "GUEST_LIMIT" || err.message?.includes("Guest limit")) {
+        setGuestLimitReached(true);
+      } else {
+        setError("Analysis failed: " + err.message);
+      }
+      setStep("input");
+    }
   };
 
   const resetToInput = () => { setStep("input"); setAnalysis(null); };
@@ -524,6 +701,22 @@ function GuestPage({ onBack, onSignUp }) {
       <button onClick={onBack} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", marginBottom: 24, fontFamily: "'Roboto',sans-serif" }}>← Back</button>
       <h1 style={{ fontSize: 26, fontWeight: 700, marginBottom: 6, color: "#111827" }}>Analyze Resume</h1>
       <p style={{ color: "#6B7280", fontSize: 14, marginBottom: 28 }}>Upload or paste your resume, then add the job description.</p>
+
+      {/* Guest limit reached banner */}
+      {guestLimitReached && (
+        <div style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: "14px 16px", marginBottom: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+          <p style={{ fontSize: 13, color: "#92400E", fontWeight: 600, margin: 0 }}>
+            You've used your 5 free analyses.
+          </p>
+          <p style={{ fontSize: 12, color: "#78350F", margin: 0, lineHeight: 1.5 }}>
+            Create a free account to get 5 more credits.
+          </p>
+          <PrimaryBtn onClick={onSignUp} style={{ alignSelf: "flex-start", padding: "8px 18px", fontSize: 13 }}>
+            Sign Up Free →
+          </PrimaryBtn>
+        </div>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 14, padding: 18, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -550,7 +743,7 @@ function GuestPage({ onBack, onSignUp }) {
   );
 }
 
-// ── Auth page ──────────────────────────────────────────────────────────────────
+// ── Auth page ─────────────────────────────────────────────────────────────────
 function AuthPage({ mode, onAuth, onToggle, onBack }) {
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
@@ -591,7 +784,7 @@ function AuthPage({ mode, onAuth, onToggle, onBack }) {
   );
 }
 
-// ── Confirm modal ──────────────────────────────────────────────────────────────
+// ── Confirm modal ─────────────────────────────────────────────────────────────
 function ConfirmModal({ title, body, confirmLabel = "Confirm", onConfirm, onCancel }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -607,7 +800,7 @@ function ConfirmModal({ title, body, confirmLabel = "Confirm", onConfirm, onCanc
   );
 }
 
-// ── Stepper — 3-step progress indicator ───────────────────────────────────────
+// ── Stepper ───────────────────────────────────────────────────────────────────
 function Stepper({ stage }) {
   const steps = [
     { key: "edit",     label: "Analyze & Edit" },
@@ -647,7 +840,7 @@ function Stepper({ stage }) {
   );
 }
 
-// ── Import landing — first-time users only ────────────────────────────────────
+// ── Import landing ────────────────────────────────────────────────────────────
 function ImportLanding({ onImportFile, importing, importError, onDismissError, onStartFresh }) {
   const fileRef = useRef();
   return (
@@ -660,7 +853,6 @@ function ImportLanding({ onImportFile, importing, importError, onDismissError, o
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-        {/* Import card */}
         <div
           onClick={() => !importing && fileRef.current.click()}
           style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 24, cursor: importing ? "default" : "pointer", transition: "border-color 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}
@@ -673,7 +865,6 @@ function ImportLanding({ onImportFile, importing, importError, onDismissError, o
         </div>
         <input ref={fileRef} type="file" accept=".pdf,.docx,.doc" style={{ display: "none" }} onChange={(e) => { const f = e.target.files[0]; if (f) { e.target.value = ""; onImportFile(f); } }} />
 
-        {/* Scratch card */}
         <div
           onClick={() => !importing && onStartFresh()}
           style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 24, cursor: importing ? "default" : "pointer", transition: "border-color 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}
@@ -710,7 +901,6 @@ function ExportModal({ resume, onExport, onCancel, exporting }) {
       <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 28, maxWidth: 400, width: "100%", display: "flex", flexDirection: "column", gap: 20, boxShadow: "0 20px 60px rgba(0,0,0,0.12)" }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>Export Resume</h3>
 
-        {/* Filename */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>File Name</label>
           <input
@@ -723,7 +913,6 @@ function ExportModal({ resume, onExport, onCancel, exporting }) {
           </span>
         </div>
 
-        {/* Format selection */}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>Format</label>
           <div style={{ display: "flex", gap: 10 }}>
@@ -740,7 +929,6 @@ function ExportModal({ resume, onExport, onCancel, exporting }) {
           </div>
         </div>
 
-        {/* Actions */}
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <GhostBtn onClick={onCancel} disabled={exporting}>Cancel</GhostBtn>
           <PrimaryBtn
@@ -756,7 +944,7 @@ function ExportModal({ resume, onExport, onCancel, exporting }) {
   );
 }
 
-// ── Stage nav bar — shared chrome across all 3 stages ─────────────────────────
+// ── Stage nav bar ─────────────────────────────────────────────────────────────
 const NAV = {
   height: 48,
   style: {
@@ -768,43 +956,31 @@ const NAV = {
 };
 
 // ── Editor page — 3-stage flow ────────────────────────────────────────────────
-function EditorPage({ auth }) {
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
-  const [loadingResume, setLoadingResume] = useState(true);
-
-  // ── Stage ─────────────────────────────────────────────────────────────────
-  const [stage, setStage]                     = useState("edit");
+function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete }) {
+  const [loadingResume, setLoadingResume]       = useState(true);
+  const [stage, setStage]                       = useState("edit");
   const [showImportLanding, setShowImportLanding] = useState(false);
+  const [resume, setResume]                     = useState(EMPTY_RESUME);
+  const [resumeName, setResumeName]             = useState("My Resume");
+  const [isImported, setIsImported]             = useState(false);
+  const [saving, setSaving]                     = useState(false);
+  const [exporting, setExporting]               = useState(false);
+  const [saveMsg, setSaveMsg]                   = useState("");
+  const [importing, setImporting]               = useState(false);
+  const [importError, setImportError]           = useState("");
+  const [pendingImport, setPendingImport]       = useState(null);
+  const [importSuccess, setImportSuccess]       = useState(false);
+  const importSuccessTimer                      = useRef(null);
+  const replaceFileRef                          = useRef();
+  const editorScrollRef                         = useRef();
+  const [showExportModal, setShowExportModal]   = useState(false);
+  const [jobInput, setJobInput]                 = useState("");
+  const [inputMode, setInputMode]               = useState("paste");
+  const [analysisStep, setAnalysisStep]         = useState("idle");
+  const [analysis, setAnalysis]                 = useState(null);
+  const [analysisError, setAnalysisError]       = useState("");
+  const [appliedEdits, setAppliedEdits]         = useState(new Set());
 
-  // ── Resume ────────────────────────────────────────────────────────────────
-  const [resume, setResume]         = useState(EMPTY_RESUME);
-  const [resumeName, setResumeName] = useState("My Resume");
-  const [isImported, setIsImported] = useState(false);
-  const [saving, setSaving]         = useState(false);
-  const [exporting, setExporting]   = useState(false);
-  const [saveMsg, setSaveMsg]       = useState("");
-
-  // ── Import ────────────────────────────────────────────────────────────────
-  const [importing, setImporting]           = useState(false);
-  const [importError, setImportError]       = useState("");
-  const [pendingImport, setPendingImport]   = useState(null);
-  const [importSuccess, setImportSuccess]   = useState(false);
-  const importSuccessTimer                  = useRef(null);
-  const replaceFileRef                      = useRef();
-  const editorScrollRef                     = useRef();
-
-  // ── Export modal ──────────────────────────────────────────────────────────
-  const [showExportModal, setShowExportModal] = useState(false);
-
-  // ── Analysis ──────────────────────────────────────────────────────────────
-  const [jobInput, setJobInput]             = useState("");
-  const [inputMode, setInputMode]           = useState("paste");
-  const [analysisStep, setAnalysisStep]     = useState("idle"); // idle | loading | results
-  const [analysis, setAnalysis]             = useState(null);
-  const [analysisError, setAnalysisError]   = useState("");
-  const [appliedEdits, setAppliedEdits]     = useState(new Set());
-
-  // ── Load resume on mount ──────────────────────────────────────────────────
   useEffect(() => {
     api.getResume(auth.token)
       .then(({ resume: r, name }) => {
@@ -815,12 +991,10 @@ function EditorPage({ auth }) {
       .finally(() => setLoadingResume(false));
   }, []);
 
-  // ── Import handlers ───────────────────────────────────────────────────────
   const hasData = () => !!(resume.basics.name || resume.experience.length || resume.education.length);
 
   const handleImportFile = async (file) => {
-    setImportError("");
-    setImporting(true);
+    setImportError(""); setImporting(true);
     try {
       const { resume: imported } = await api.importResume(file, auth.token);
       const normalized = normalizeResume(imported);
@@ -839,33 +1013,27 @@ function EditorPage({ auth }) {
     setPendingImport(null);
     setShowImportLanding(false);
     setStage("edit");
-    // Clear stale analysis; keep jobInput so user can re-analyze quickly
     setAnalysis(null);
     setAnalysisStep("idle");
     setAppliedEdits(new Set());
-    // Success banner with auto-dismiss
     setImportSuccess(true);
     if (importSuccessTimer.current) clearTimeout(importSuccessTimer.current);
     importSuccessTimer.current = setTimeout(() => setImportSuccess(false), 7000);
-    // Scroll editor back to top
     requestAnimationFrame(() => {
       if (editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
     });
   };
 
-  // ── Resume CRUD ───────────────────────────────────────────────────────────
   const handleChange = (next) => setResume(normalizeResume(next));
 
   const handleGoPreview = async () => {
-    // Strip empty/whitespace-only bullets before previewing
     const cleaned = normalizeResume({
       ...resume,
       experience: resume.experience.map((e) => ({ ...e, points: e.points.filter((p) => p.trim()) })),
       projects:   resume.projects.map((p)   => ({ ...p, points: p.points.filter((pt) => pt.trim()) })),
     });
     setResume(cleaned);
-    setSaveMsg("Saving your changes…");
-    setSaving(true);
+    setSaveMsg("Saving your changes…"); setSaving(true);
     try {
       await api.saveResume(cleaned, resumeName, auth.token);
       setIsImported(false);
@@ -897,17 +1065,25 @@ function EditorPage({ auth }) {
     finally { setExporting(false); }
   };
 
-  // ── Analysis handlers ─────────────────────────────────────────────────────
   const handleAnalyze = async () => {
     if (!jobInput.trim()) return;
-    if (inputMode === "url") return; // URL input is disabled
+    if (inputMode === "url") return;
     setAnalysisError(""); setAnalysisStep("loading");
     try {
       const text = resumeToPlainText(resume);
       if (!text.trim()) { setAnalysisError("Your resume is empty — fill in the editor first."); setAnalysisStep("idle"); return; }
       const data = await api.analyze(text, jobInput.trim(), inputMode, auth.token);
-      setAnalysis(data); setAnalysisStep("results"); setAppliedEdits(new Set());
-    } catch (err) { setAnalysisError(err.message); setAnalysisStep("idle"); }
+      const { creditsRemaining, ...analysisData } = data;
+      setAnalysis(analysisData); setAnalysisStep("results"); setAppliedEdits(new Set());
+      if (onAnalysisComplete) onAnalysisComplete(creditsRemaining);
+    } catch (err) {
+      if (err.code === "NO_CREDITS" || err.message?.includes("No credits")) {
+        if (onOpenBuyModal) onOpenBuyModal();
+      } else {
+        setAnalysisError(err.message);
+      }
+      setAnalysisStep("idle");
+    }
   };
 
   const handleApplyEdit = (editIdx, edit) => {
@@ -916,7 +1092,6 @@ function EditorPage({ auth }) {
     return false;
   };
 
-  // ── Loading ───────────────────────────────────────────────────────────────
   if (loadingResume) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "calc(100vh - 50px)" }}>
@@ -925,7 +1100,6 @@ function EditorPage({ auth }) {
     );
   }
 
-  // ── Confirm modal (used by both import landing and replace flow) ──────────
   const confirmModal = pendingImport && (
     <ConfirmModal
       title="Replace current resume?"
@@ -936,7 +1110,6 @@ function EditorPage({ auth }) {
     />
   );
 
-  // ── First-time import landing ─────────────────────────────────────────────
   if (showImportLanding) {
     return (
       <>
@@ -954,7 +1127,6 @@ function EditorPage({ auth }) {
 
   const hasAnalysis = analysisStep === "results" && !!analysis;
 
-  // shared input style for job textarea/input
   const jiStyle = {
     width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10,
     color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 13, padding: "11px 14px",
@@ -966,8 +1138,6 @@ function EditorPage({ auth }) {
     return (
       <>
         {confirmModal}
-
-        {/* hidden replace-resume file input */}
         <input
           ref={replaceFileRef}
           type="file"
@@ -978,18 +1148,14 @@ function EditorPage({ auth }) {
 
         <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 50px)" }}>
 
-          {/* Nav bar */}
           <div style={NAV.style} height={NAV.height}>
-            {/* Left: resume name */}
             <input
               value={resumeName}
               onChange={(e) => setResumeName(e.target.value)}
               style={{ background: "transparent", border: "none", outline: "none", color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 13, fontWeight: 600, minWidth: 0 }}
               placeholder="Resume name"
             />
-            {/* Center: stepper */}
             <Stepper stage="edit" />
-            {/* Right: actions */}
             <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
               {saveMsg && <span style={{ fontSize: 11, color: saveMsg === "Saved!" ? "#059669" : "#DC2626" }}>{saveMsg}</span>}
               <GhostBtn onClick={() => replaceFileRef.current.click()} disabled={importing} style={{ fontSize: 11, padding: "5px 12px" }}>
@@ -1004,7 +1170,6 @@ function EditorPage({ auth }) {
             </div>
           </div>
 
-          {/* Import success banner */}
           {importSuccess && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", background: "#ECFDF5", borderBottom: "1px solid #BBF7D0", flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: "#059669", flex: 1, lineHeight: 1.5 }}>
@@ -1019,7 +1184,6 @@ function EditorPage({ auth }) {
             </div>
           )}
 
-          {/* Import error banner */}
           {importError && (
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", background: "#FEF2F2", borderBottom: "1px solid #FECACA", flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: "#DC2626", flex: 1, lineHeight: 1.5 }}>{importError}</span>
@@ -1027,17 +1191,15 @@ function EditorPage({ auth }) {
             </div>
           )}
 
-          {/* 2-panel body */}
           <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
-            {/* LEFT — Analysis (45%) */}
+            {/* LEFT — Analysis */}
             <div style={{ flex: "0 0 45%", borderRight: "1px solid #E5E7EB", display: "flex", flexDirection: "column", background: "#F8FAFC", overflow: "hidden" }}>
               <div style={{ padding: "8px 14px", borderBottom: "1px solid #E5E7EB", background: "#FFFFFF", flexShrink: 0 }}>
                 <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#9CA3AF" }}>Analysis</span>
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
 
-                {/* Idle: job input form */}
                 {analysisStep === "idle" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                     <p style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.6, margin: 0 }}>
@@ -1069,13 +1231,16 @@ function EditorPage({ auth }) {
                     <PrimaryBtn onClick={handleAnalyze} disabled={!jobInput.trim() || inputMode === "url"} style={{ width: "100%", padding: "11px" }}>
                       Analyze →
                     </PrimaryBtn>
+                    {creditBalance !== null && (
+                      <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
+                        ⚡ {creditBalance} credit{creditBalance === 1 ? "" : "s"} remaining
+                      </p>
+                    )}
                   </div>
                 )}
 
-                {/* Loading */}
                 {analysisStep === "loading" && <Spinner label="Analyzing your resume…" />}
 
-                {/* Results */}
                 {hasAnalysis && (
                   <AnalysisInsights
                     analysis={analysis}
@@ -1087,9 +1252,8 @@ function EditorPage({ auth }) {
               </div>
             </div>
 
-            {/* RIGHT — Editor (55%) */}
+            {/* RIGHT — Editor */}
             <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "#F8FAFC", overflow: "hidden", position: "relative" }}>
-              {/* Import overlay */}
               {importing && (
                 <div style={{ position: "absolute", inset: 0, zIndex: 10, background: "rgba(248,250,252,0.92)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
                   <Spinner label="Importing resume and preparing your editor…" />
@@ -1109,7 +1273,7 @@ function EditorPage({ auth }) {
     );
   }
 
-  // ── Stage 2: Preview (read-only, full-width) ──────────────────────────────
+  // ── Stage 2: Preview ──────────────────────────────────────────────────────
   if (stage === "preview") {
     return (
       <>
@@ -1122,30 +1286,25 @@ function EditorPage({ auth }) {
           />
         )}
         <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 50px)" }}>
-
-        {/* Nav bar */}
-        <div style={NAV.style}>
-          <GhostBtn onClick={() => setStage("edit")} style={{ fontSize: 11, padding: "5px 14px", justifySelf: "start" }}>← Edit</GhostBtn>
-          <Stepper stage="preview" />
-          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-            <PrimaryBtn onClick={() => setShowExportModal(true)} style={{ fontSize: 11, padding: "7px 14px" }}>Export DOCX</PrimaryBtn>
-            <div title={!hasAnalysis ? "Run analysis in Stage 1 to unlock outreach" : ""} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-              <GhostBtn onClick={() => setStage("outreach")} disabled={!hasAnalysis} style={{ fontSize: 11, padding: "5px 12px" }}>
-                Outreach →
-              </GhostBtn>
-              {!hasAnalysis && <span style={{ fontSize: 9, color: "#9CA3AF", letterSpacing: "0.04em" }}>Run analysis first</span>}
+          <div style={NAV.style}>
+            <GhostBtn onClick={() => setStage("edit")} style={{ fontSize: 11, padding: "5px 14px", justifySelf: "start" }}>← Edit</GhostBtn>
+            <Stepper stage="preview" />
+            <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+              <PrimaryBtn onClick={() => setShowExportModal(true)} style={{ fontSize: 11, padding: "7px 14px" }}>Export DOCX</PrimaryBtn>
+              <div title={!hasAnalysis ? "Run analysis in Stage 1 to unlock outreach" : ""} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
+                <GhostBtn onClick={() => setStage("outreach")} disabled={!hasAnalysis} style={{ fontSize: 11, padding: "5px 12px" }}>
+                  Outreach →
+                </GhostBtn>
+                {!hasAnalysis && <span style={{ fontSize: 9, color: "#9CA3AF", letterSpacing: "0.04em" }}>Run analysis first</span>}
+              </div>
             </div>
           </div>
-        </div>
-
-        {/* Full-width resume preview */}
-        <div style={{ flex: 1, overflowY: "auto", background: "#E2E8F0", padding: "28px 24px" }}>
-          <style>{PREVIEW_CSS}</style>
-          <div style={{ background: "#fff", maxWidth: 860, margin: "0 auto", boxShadow: "0 4px 24px rgba(0,0,0,0.10)" }}>
-            <div className="rs" dangerouslySetInnerHTML={{ __html: resumeToHtml(resume) }} />
+          <div style={{ flex: 1, overflowY: "auto", background: "#E2E8F0", padding: "28px 24px" }}>
+            <style>{PREVIEW_CSS}</style>
+            <div style={{ background: "#fff", maxWidth: 860, margin: "0 auto", boxShadow: "0 4px 24px rgba(0,0,0,0.10)" }}>
+              <div className="rs" dangerouslySetInnerHTML={{ __html: resumeToHtml(resume) }} />
+            </div>
           </div>
-        </div>
-
         </div>
       </>
     );
@@ -1155,8 +1314,6 @@ function EditorPage({ auth }) {
   if (stage === "outreach") {
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 50px)" }}>
-
-        {/* Nav bar */}
         <div style={NAV.style}>
           <GhostBtn onClick={() => setStage("preview")} style={{ fontSize: 11, padding: "5px 14px", justifySelf: "start" }}>← Preview</GhostBtn>
           <Stepper stage="outreach" />
@@ -1169,12 +1326,9 @@ function EditorPage({ auth }) {
             </PrimaryBtn>
           </div>
         </div>
-
-        {/* Outreach content — full width, scrollable */}
         <div style={{ flex: 1, overflowY: "auto", padding: "28px 24px", maxWidth: 720, width: "100%", margin: "0 auto" }}>
           <OutreachSection analysis={analysis} />
         </div>
-
       </div>
     );
   }
@@ -1182,14 +1336,41 @@ function EditorPage({ auth }) {
   return null;
 }
 
-// ── Root App ───────────────────────────────────────────────────────────────────
+// ── Root App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [auth, setAuth]         = useState(loadAuth);
-  const [page, setPage]         = useState("home");
+  const [page, setPage]         = useState(() => {
+    const path = window.location.pathname;
+    if (path === "/credits/success") return "credits-success";
+    if (path === "/credits/cancel")  return "credits-cancel";
+    return "home";
+  });
   const [authMode, setAuthMode] = useState("login");
+  const [creditBalance, setCreditBalance] = useState(null);
+  const [showBuyModal, setShowBuyModal]   = useState(false);
 
-  const handleAuth = (data) => { setAuth(data); saveAuth(data); setPage("editor"); };
-  const handleLogout = () => { setAuth(null); clearAuth(); setPage("home"); };
+  const fetchCredits = async (knownBalance) => {
+    if (knownBalance !== undefined && knownBalance !== null) {
+      setCreditBalance(knownBalance);
+      return;
+    }
+    if (!auth?.token) return;
+    try {
+      const data = await api.getCredits(auth.token);
+      setCreditBalance(data.balance);
+    } catch { /* non-fatal */ }
+  };
+
+  useEffect(() => {
+    if (auth?.token) fetchCredits();
+    else setCreditBalance(null);
+  }, [auth?.token]);
+
+  const handleAuth = (data) => {
+    setAuth(data); saveAuth(data); setPage("editor");
+    // Balance will load via useEffect watching auth.token
+  };
+  const handleLogout = () => { setAuth(null); clearAuth(); setCreditBalance(null); setPage("home"); };
   const goLogin    = () => { setAuthMode("login");    setPage("login"); };
   const goRegister = () => { setAuthMode("register"); setPage("login"); };
 
@@ -1213,6 +1394,10 @@ export default function App() {
         ${PREVIEW_CSS}
       `}</style>
 
+      {showBuyModal && auth && (
+        <BuyCreditsModal auth={auth} onClose={() => setShowBuyModal(false)} />
+      )}
+
       <div style={{ background: "#F8FAFC", minHeight: "100vh", color: "#111827", fontFamily: "'Roboto',sans-serif" }}>
 
         {/* Navbar */}
@@ -1224,12 +1409,13 @@ export default function App() {
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             {auth ? (
               <>
+                <CreditsBadge balance={creditBalance} onOpenModal={() => setShowBuyModal(true)} />
                 <span style={{ fontSize: 12, color: "#6B7280" }}>{auth.user?.email}</span>
                 <GhostBtn onClick={handleLogout} style={{ fontSize: 12, padding: "5px 14px" }}>Logout</GhostBtn>
               </>
             ) : (
               <>
-                <GhostBtn onClick={goLogin}    style={{ fontSize: 12, padding: "5px 14px" }}>Login</GhostBtn>
+                <GhostBtn onClick={goLogin}     style={{ fontSize: 12, padding: "5px 14px" }}>Login</GhostBtn>
                 <PrimaryBtn onClick={goRegister} style={{ fontSize: 12, padding: "6px 16px" }}>Sign Up</PrimaryBtn>
               </>
             )}
@@ -1248,12 +1434,29 @@ export default function App() {
               onBack={() => setPage("home")}
             />
           )}
-          {page === "editor" &&  auth && <EditorPage auth={auth} />}
+          {page === "editor" && auth && (
+            <EditorPage
+              auth={auth}
+              creditBalance={creditBalance}
+              onOpenBuyModal={() => setShowBuyModal(true)}
+              onAnalysisComplete={fetchCredits}
+            />
+          )}
           {page === "editor" && !auth && (
             <div style={{ textAlign: "center", padding: "80px 20px" }}>
               <p style={{ color: "#6B7280", marginBottom: 16 }}>Please log in to access the editor.</p>
               <PrimaryBtn onClick={goLogin}>Login</PrimaryBtn>
             </div>
+          )}
+          {page === "credits-success" && (
+            <CreditsSuccessPage
+              auth={auth}
+              onGoEditor={() => setPage(auth ? "editor" : "home")}
+              onCreditsFetched={setCreditBalance}
+            />
+          )}
+          {page === "credits-cancel" && (
+            <CreditsCancelPage onGoEditor={() => setPage(auth ? "editor" : "home")} />
           )}
         </div>
 

@@ -1,5 +1,4 @@
 import "dotenv/config";
-import { DatabaseSync } from "node:sqlite";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -8,39 +7,90 @@ import jwt from "jsonwebtoken";
 import Anthropic from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
+import Stripe from "stripe";
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType,
   TabStopType, BorderStyle, convertInchesToTwip,
 } from "docx";
+import { pool, query, initSchema } from "./db.js";
+import { guestRateLimit, authCreditCheck } from "./middleware/rateLimit.js";
 
-// ── Database ──────────────────────────────────────────────────────────────────
+// ── Startup env check ──────────────────────────────────────────────────────────
 
-const db = new DatabaseSync("copilot.db");
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT    UNIQUE NOT NULL,
-    hash  TEXT    NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE TABLE IF NOT EXISTS resumes (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name       TEXT    NOT NULL DEFAULT 'My Resume',
-    data       TEXT    NOT NULL,
-    updated_at TEXT    DEFAULT (datetime('now'))
-  );
-`);
+const REQUIRED = ["JWT_SECRET", "DATABASE_URL", "ANTHROPIC_API_KEY"];
+const missing = REQUIRED.filter((k) => !process.env[k]);
+if (missing.length) {
+  console.error(`Missing required environment variables: ${missing.join(", ")}`);
+  process.exit(1);
+}
+
+const JWT_SECRET  = process.env.JWT_SECRET;
+const PORT        = process.env.PORT || 3001;
+const stripe      = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const client      = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const upload      = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ── App setup ─────────────────────────────────────────────────────────────────
 
 const app = express();
-const PORT = process.env.PORT || 3001;
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const JWT_SECRET = process.env.JWT_SECRET;
+app.set("trust proxy", 1);
 
-app.use(cors({ origin: "http://localhost:5173" }));
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : ["http://localhost:5173"];
+
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+    else cb(new Error("Not allowed by CORS"));
+  },
+}));
+
+// ── Stripe webhook (raw body — must be registered BEFORE express.json()) ──────
+
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: "Stripe not configured" });
+
+  const sig = req.headers["stripe-signature"];
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    return res.status(400).json({ error: "Webhook signature verification failed" });
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+
+    // Idempotency check
+    try {
+      const exists = await query("SELECT id FROM stripe_events WHERE stripe_event_id = $1", [event.id]);
+      if (exists.rows.length > 0) return res.json({ received: true });
+
+      const { user_id, credits } = session.metadata;
+      const userId      = parseInt(user_id, 10);
+      const creditCount = parseInt(credits, 10);
+
+      await query(
+        "UPDATE credits SET balance = balance + $1, updated_at = NOW() WHERE user_id = $2",
+        [creditCount, userId]
+      );
+      await query(
+        "INSERT INTO credit_txns (user_id, delta, reason, stripe_payment_id) VALUES ($1, $2, 'purchase', $3)",
+        [userId, creditCount, session.payment_intent]
+      );
+      await query("INSERT INTO stripe_events (stripe_event_id) VALUES ($1)", [event.id]);
+    } catch (err) {
+      console.error("Webhook processing error:", err.message);
+      return res.status(500).json({ error: "Processing failed" });
+    }
+  }
+
+  res.json({ received: true });
+});
+
+// ── Global middleware ─────────────────────────────────────────────────────────
+
 app.use(express.json({ limit: "2mb" }));
 
 // ── Auth middleware ────────────────────────────────────────────────────────────
@@ -58,9 +108,9 @@ function requireAuth(req, res, next) {
 
 // ── DOCX generation ────────────────────────────────────────────────────────────
 
-const FONT = "Georgia";
-const BODY = 18;                          //9 pt in half-points
-const TAB  = convertInchesToTwip(6.5);   // right tab stop at content width
+const FONT   = "Georgia";
+const BODY   = 18;
+const TAB    = convertInchesToTwip(6.5);
 const MARGIN = convertInchesToTwip(0.75);
 
 function secHeading(text) {
@@ -83,7 +133,6 @@ async function buildDocx(resume) {
   const { basics, skills = [], experience = [], projects = [], education = [] } = resume;
   const children = [];
 
-  // Header
   children.push(
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -102,8 +151,7 @@ async function buildDocx(resume) {
     }),
   );
 
-  // Skills
-  const activeSkills = skills.filter(s => s.category || s.items?.length);
+  const activeSkills = skills.filter((s) => s.category || s.items?.length);
   if (activeSkills.length) {
     children.push(secHeading("Technical Skills"));
     for (const s of activeSkills) {
@@ -119,12 +167,11 @@ async function buildDocx(resume) {
     }
   }
 
-  // Experience
   if (experience.length) {
     children.push(secHeading("Professional Experience"));
     for (const exp of experience) {
       let title = exp.role || "";
-      if (exp.company) title += ` \u2013 ${exp.company}`;
+      if (exp.company)  title += ` \u2013 ${exp.company}`;
       if (exp.location) title += `, ${exp.location}`;
       const date = [exp.start, exp.end].filter(Boolean).join(" \u2013 ");
       children.push(
@@ -141,7 +188,6 @@ async function buildDocx(resume) {
     }
   }
 
-  // Projects
   if (projects.length) {
     children.push(secHeading("Projects"));
     for (const proj of projects) {
@@ -155,12 +201,10 @@ async function buildDocx(resume) {
     }
   }
 
-  // Education
   if (education.length) {
     children.push(secHeading("Education"));
     for (const edu of education) {
-      const date = [edu.start, edu.end].filter(Boolean).join(" \u2013 ");
-      // backwards-compat: old saved data may use `school`
+      const date        = [edu.start, edu.end].filter(Boolean).join(" \u2013 ");
       const institution = edu.institution || edu.school || "";
       children.push(
         new Paragraph({
@@ -208,17 +252,28 @@ app.post("/api/auth/register", async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
   if (password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
+
+  const dbClient = await pool.connect();
   try {
     const hash = await bcrypt.hash(password, 10);
-    const stmt = db.prepare("INSERT INTO users (email, hash) VALUES (?, ?)");
-    const result = stmt.run(email.toLowerCase().trim(), hash);
-    const id = Number(result.lastInsertRowid);
-    const token = jwt.sign({ id, email: email.toLowerCase() }, JWT_SECRET, { expiresIn: "7d" });
-    res.json({ token, user: { id, email: email.toLowerCase() } });
+    await dbClient.query("BEGIN");
+    const result = await dbClient.query(
+      "INSERT INTO users (email, hash) VALUES ($1, $2) RETURNING id",
+      [email.toLowerCase().trim(), hash]
+    );
+    const id = result.rows[0].id;
+    await dbClient.query("INSERT INTO credits (user_id, balance) VALUES ($1, 5)", [id]);
+    await dbClient.query("COMMIT");
+
+    const token = jwt.sign({ id, email: email.toLowerCase().trim() }, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user: { id, email: email.toLowerCase().trim() } });
   } catch (err) {
-    if (err.message?.includes("UNIQUE")) return res.status(409).json({ error: "Email already registered" });
-    console.error(err);
+    await dbClient.query("ROLLBACK");
+    if (err.code === "23505") return res.status(409).json({ error: "Email already registered" });
+    console.error("Register error:", err.message);
     res.status(500).json({ error: "Registration failed" });
+  } finally {
+    dbClient.release();
   }
 });
 
@@ -226,12 +281,18 @@ app.post("/api/auth/register", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email.toLowerCase().trim());
-  if (!user || !(await bcrypt.compare(password, user.hash))) {
-    return res.status(401).json({ error: "Invalid credentials" });
+  try {
+    const result = await query("SELECT * FROM users WHERE email = $1", [email.toLowerCase().trim()]);
+    const user = result.rows[0];
+    if (!user || !(await bcrypt.compare(password, user.hash))) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user: { id: user.id, email: user.email } });
+  } catch (err) {
+    console.error("Login error:", err.message);
+    res.status(500).json({ error: "Login failed" });
   }
-  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: "7d" });
-  res.json({ token, user: { id: user.id, email: user.email } });
 });
 
 // Extract text from PDF or DOCX
@@ -255,8 +316,15 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
   }
 });
 
-// Analyze resume against job
-app.post("/api/analyze", async (req, res) => {
+// Analyze resume against job — with conditional rate-limiting / credit-checking
+app.post("/api/analyze", (req, res, next) => {
+  const hasAuth = req.headers.authorization?.startsWith("Bearer ");
+  if (hasAuth) {
+    requireAuth(req, res, () => authCreditCheck(req, res, next));
+  } else {
+    guestRateLimit(req, res, next);
+  }
+}, async (req, res) => {
   const { resumeText, jobInput, inputMode } = req.body || {};
   if (!resumeText || !jobInput) return res.status(400).json({ error: "Missing resumeText or jobInput" });
 
@@ -286,7 +354,7 @@ app.post("/api/analyze", async (req, res) => {
     ? `JOB POSTING URL: ${jobInput}\n(Infer role and company from the URL context.)`
     : `JOB DESCRIPTION:\n${jobInput}`;
 
-const prompt = `You are an expert job application coach and resume analyst.
+  const prompt = `You are an expert job application coach and resume analyst.
 
 ${jobSection}
 
@@ -408,6 +476,7 @@ QUALITY GUIDELINES
 - Keyword gaps must come from the job description
 - Outreach messages must feel natural and personalized
 `;
+
   try {
     const message = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -415,12 +484,11 @@ QUALITY GUIDELINES
       messages: [{ role: "user", content: prompt }],
     });
 
-    let raw = message.content.map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+    let raw = message.content.map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // Attempt to close truncated JSON
       const stack = [];
       for (const ch of raw) {
         if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
@@ -429,7 +497,27 @@ QUALITY GUIDELINES
       raw += stack.reverse().join("");
       parsed = JSON.parse(raw);
     }
-    res.json(parsed);
+
+    // Deduct 1 credit for authenticated users and return updated balance
+    let creditsRemaining = null;
+    if (req.user) {
+      try {
+        const result = await query(
+          "UPDATE credits SET balance = balance - 1, updated_at = NOW() WHERE user_id = $1 RETURNING balance",
+          [req.user.id]
+        );
+        creditsRemaining = result.rows[0]?.balance ?? null;
+        await query(
+          "INSERT INTO credit_txns (user_id, delta, reason) VALUES ($1, -1, 'analysis')",
+          [req.user.id]
+        );
+      } catch (err) {
+        console.error("Credit deduction error:", err.message);
+        // Non-fatal: user still gets their analysis result
+      }
+    }
+
+    res.json({ ...parsed, creditsRemaining });
   } catch (err) {
     console.error("Analyze error:", err.message);
     res.status(500).json({ error: "Analysis failed: " + err.message });
@@ -437,34 +525,43 @@ QUALITY GUIDELINES
 });
 
 // Resume — get saved resume (logged-in)
-app.get("/api/resume", requireAuth, (req, res) => {
-  const row = db.prepare(
-    "SELECT * FROM resumes WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1"
-  ).get(req.user.id);
-  if (!row) return res.json({ resume: null, name: "My Resume" });
+app.get("/api/resume", requireAuth, async (req, res) => {
   try {
-    res.json({ resume: JSON.parse(row.data), name: row.name });
-  } catch {
-    res.json({ resume: null, name: "My Resume" });
+    const result = await query(
+      "SELECT * FROM resumes WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1",
+      [req.user.id]
+    );
+    const row = result.rows[0];
+    if (!row) return res.json({ resume: null, name: "My Resume" });
+    res.json({ resume: row.data, name: row.name });
+  } catch (err) {
+    console.error("Get resume error:", err.message);
+    res.status(500).json({ error: "Failed to load resume" });
   }
 });
 
 // Resume — save/update (logged-in)
-app.put("/api/resume", requireAuth, (req, res) => {
+app.put("/api/resume", requireAuth, async (req, res) => {
   const { resume, name } = req.body || {};
   if (!resume) return res.status(400).json({ error: "Missing resume data" });
-  const data = JSON.stringify(resume);
-  const existing = db.prepare("SELECT id FROM resumes WHERE user_id = ?").get(req.user.id);
-  if (existing) {
-    db.prepare(
-      "UPDATE resumes SET data = ?, name = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(data, name || "My Resume", existing.id);
-  } else {
-    db.prepare(
-      "INSERT INTO resumes (user_id, name, data) VALUES (?, ?, ?)"
-    ).run(req.user.id, name || "My Resume", data);
+  try {
+    const existing = await query("SELECT id FROM resumes WHERE user_id = $1", [req.user.id]);
+    if (existing.rows.length > 0) {
+      await query(
+        "UPDATE resumes SET data = $1, name = $2, updated_at = NOW() WHERE id = $3",
+        [resume, name || "My Resume", existing.rows[0].id]
+      );
+    } else {
+      await query(
+        "INSERT INTO resumes (user_id, name, data) VALUES ($1, $2, $3)",
+        [req.user.id, name || "My Resume", resume]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Save resume error:", err.message);
+    res.status(500).json({ error: "Failed to save resume" });
   }
-  res.json({ ok: true });
 });
 
 // Export DOCX (logged-in)
@@ -584,9 +681,8 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
   if (!req.file) return res.status(400).json({ error: "No file uploaded." });
 
   const name = req.file.originalname.toLowerCase();
-  let text = "";
+  let text   = "";
 
-  // ── 1. Extract plain text ──────────────────────────────────────────────────
   try {
     if (name.endsWith(".pdf")) {
       const result = await pdfParse(req.file.buffer);
@@ -605,7 +701,6 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
     return res.status(422).json({ error: "Couldn't extract structured data. You can fill it manually." });
   }
 
-  // ── 2. SKIP_AI bypass ─────────────────────────────────────────────────────
   if (process.env.SKIP_AI === "true") {
     return res.json({
       resume: normalizeImportedResume({
@@ -618,7 +713,6 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
     });
   }
 
-  // ── 3. Call LLM ───────────────────────────────────────────────────────────
   try {
     const message = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -627,28 +721,18 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
     });
 
     let raw = message.content.map((b) => b.text || "").join("").trim();
-
-    // Strip accidental markdown fences
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
 
-    // ── 4. Parse JSON ────────────────────────────────────────────────────────
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      // Try to salvage by extracting the outermost { ... }
       const match = raw.match(/\{[\s\S]*\}/);
-      if (!match) {
-        return res.status(422).json({ error: "Couldn't extract structured data. You can fill it manually." });
-      }
-      try {
-        parsed = JSON.parse(match[0]);
-      } catch {
-        return res.status(422).json({ error: "Couldn't extract structured data. You can fill it manually." });
-      }
+      if (!match) return res.status(422).json({ error: "Couldn't extract structured data. You can fill it manually." });
+      try { parsed = JSON.parse(match[0]); }
+      catch { return res.status(422).json({ error: "Couldn't extract structured data. You can fill it manually." }); }
     }
 
-    // ── 5. Validate and sanitize ─────────────────────────────────────────────
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return res.status(422).json({ error: "Couldn't extract structured data. You can fill it manually." });
     }
@@ -660,5 +744,84 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
   }
 });
 
+// ── Credit routes ─────────────────────────────────────────────────────────────
+
+const PACKAGES = {
+  starter: { credits: 5,  amount_cents: 250,  name: "5 Credits – Starter" },
+  pro:     { credits: 15, amount_cents: 600,  name: "15 Credits – Pro" },
+  power:   { credits: 40, amount_cents: 1400, name: "40 Credits – Power" },
+};
+
+app.get("/api/credits", requireAuth, async (req, res) => {
+  try {
+    const result = await query("SELECT balance FROM credits WHERE user_id = $1", [req.user.id]);
+    const row = result.rows[0];
+    res.json({ balance: row ? row.balance : 0 });
+  } catch (err) {
+    console.error("Get credits error:", err.message);
+    res.status(500).json({ error: "Failed to fetch credits" });
+  }
+});
+
+app.get("/api/credits/history", requireAuth, async (req, res) => {
+  try {
+    const result = await query(
+      "SELECT * FROM credit_txns WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20",
+      [req.user.id]
+    );
+    res.json({ history: result.rows });
+  } catch (err) {
+    console.error("Credit history error:", err.message);
+    res.status(500).json({ error: "Failed to fetch credit history" });
+  }
+});
+
+app.post("/api/credits/checkout", requireAuth, async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: "Stripe not configured" });
+
+  const { package: pkg } = req.body || {};
+  const pack = PACKAGES[pkg];
+  if (!pack) return res.status(400).json({ error: "Invalid package. Use: starter, pro, or power." });
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          product_data: { name: pack.name },
+          unit_amount: pack.amount_cents,
+        },
+        quantity: 1,
+      }],
+      success_url: "http://localhost:5173/credits/success?session_id={CHECKOUT_SESSION_ID}",
+      cancel_url:  "http://localhost:5173/credits/cancel",
+      metadata: {
+        user_id: String(req.user.id),
+        package: pkg,
+        credits: String(pack.credits),
+      },
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error("Stripe checkout error:", err.message);
+    res.status(500).json({ error: "Failed to create checkout session" });
+  }
+});
+
+// ── Health ────────────────────────────────────────────────────────────────────
+
 app.get("/health", (_, res) => res.json({ status: "ok" }));
-app.listen(PORT, () => console.log(`CoPilot backend running on http://localhost:${PORT}`));
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
+initSchema()
+  .then(() => {
+    app.listen(PORT, () =>
+      console.error(`CoPilot backend running on http://localhost:${PORT}`)
+    );
+  })
+  .catch((err) => {
+    console.error("Failed to initialize database schema:", err.message);
+    process.exit(1);
+  });

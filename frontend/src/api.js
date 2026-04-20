@@ -9,7 +9,12 @@ async function req(method, path, body, token) {
     body: body != null ? JSON.stringify(body) : undefined,
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Request failed");
+  if (!res.ok) {
+    const err = new Error(data.error || "Request failed");
+    err.code   = data.code;
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -65,4 +70,13 @@ export const api = {
     }
     return res.blob();
   },
+
+  getCredits: (token) =>
+    req("GET", "/credits", null, token),
+
+  getCreditHistory: (token) =>
+    req("GET", "/credits/history", null, token),
+
+  checkout: (pkg, token) =>
+    req("POST", "/credits/checkout", { package: pkg }, token),
 };
