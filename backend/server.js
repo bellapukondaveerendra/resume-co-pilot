@@ -1,9 +1,11 @@
 import "dotenv/config";
 import express from "express";
+import helmet from "helmet";
 import cors from "cors";
 import multer from "multer";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import rateLimit from "express-rate-limit";
 import Anthropic from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
@@ -14,7 +16,7 @@ import {
   TabStopType, BorderStyle, convertInchesToTwip,
 } from "docx";
 import { pool, query, initSchema } from "./db.js";
-import { guestRateLimit, authCreditCheck } from "./middleware/rateLimit.js";
+import { guestRateLimit } from "./middleware/rateLimit.js";
 
 // ── Startup env check ──────────────────────────────────────────────────────────
 
@@ -24,6 +26,8 @@ if (missing.length) {
   console.error(`Missing required environment variables: ${missing.join(", ")}`);
   process.exit(1);
 }
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 const JWT_SECRET  = process.env.JWT_SECRET;
 const PORT        = process.env.PORT || 3001;
@@ -36,6 +40,11 @@ const upload      = multer({ storage: multer.memoryStorage(), limits: { fileSize
 const app = express();
 app.set("trust proxy", 1);
 
+app.use(helmet({
+  contentSecurityPolicy: false,   // SPA manages its own CSP
+  crossOriginEmbedderPolicy: false,
+}));
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",")
   : ["http://localhost:5173"];
@@ -46,6 +55,15 @@ app.use(cors({
     else cb(new Error("Not allowed by CORS"));
   },
 }));
+
+// Brute-force protection: 20 attempts per IP per 15 min on auth routes
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts, please try again later." },
+});
 
 // ── Stripe webhook (raw body — must be registered BEFORE express.json()) ──────
 
@@ -249,9 +267,10 @@ async function buildDocx(resume) {
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // Auth — register
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", authLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: "Invalid email address" });
   if (password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
 
   const dbClient = await pool.connect();
@@ -279,7 +298,7 @@ app.post("/api/auth/register", async (req, res) => {
 });
 
 // Auth — login
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
   try {
@@ -317,17 +336,32 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
   }
 });
 
-// Analyze resume against job — with conditional rate-limiting / credit-checking
+// Analyze resume against job — with conditional rate-limiting / atomic credit deduction
 app.post("/api/analyze", (req, res, next) => {
   const hasAuth = req.headers.authorization?.startsWith("Bearer ");
-  if (hasAuth) {
-    requireAuth(req, res, () => authCreditCheck(req, res, next));
-  } else {
-    guestRateLimit(req, res, next);
-  }
+  if (hasAuth) requireAuth(req, res, next);
+  else guestRateLimit(req, res, next);
 }, async (req, res) => {
   const { resumeText, jobInput, inputMode } = req.body || {};
   if (!resumeText || !jobInput) return res.status(400).json({ error: "Missing resumeText or jobInput" });
+
+  // ── Atomic credit deduction before AI call (prevents race conditions) ─────
+  let creditsRemaining = null;
+  if (req.user) {
+    try {
+      const deduct = await query(
+        "UPDATE credits SET balance = balance - 1, updated_at = NOW() WHERE user_id = $1 AND balance > 0 RETURNING balance",
+        [req.user.id]
+      );
+      if (deduct.rows.length === 0) {
+        return res.status(402).json({ error: "No credits remaining", code: "NO_CREDITS" });
+      }
+      creditsRemaining = deduct.rows[0].balance;
+    } catch (err) {
+      console.error("Credit deduction error:", err.message);
+      return res.status(500).json({ error: "Credit check failed" });
+    }
+  }
 
   if (process.env.SKIP_AI === "true") {
     return res.json({
@@ -388,6 +422,10 @@ OUTPUT FORMAT
     {
       "type": "ADD" | "EDIT" | "DELETE",
       "statement": "for ADD or DELETE",
+      "target": {
+        "section": "experience" | "projects",
+        "name": "exact company name (for experience) or project name (for projects) copied verbatim from the resume"
+      },
       "from": "ONLY for EDIT",
       "to": "ONLY for EDIT"
     }
@@ -433,6 +471,11 @@ STRICT RULES
 6. For ADD:
    - Write complete, ATS-optimized, high-impact bullet points.
    - Do not generate generic or filler content.
+   - ALWAYS include a "target" field specifying exactly where to insert the bullet:
+     - "section": "experience" if it belongs under a job role, "projects" if under a project.
+     - "name": copy the company name (for experience) or project name (for projects) EXACTLY
+       as it appears in the resume — do not paraphrase or abbreviate.
+   - Only target entries that already exist in the resume. Do not invent new entries.
 
 7. Prioritize:
    - High-impact improvements over minor wording changes
@@ -469,6 +512,28 @@ Do NOT:
 - make the message overly long or salesy
 
 --------------------------------------------------
+COLD EMAIL RULES
+--------------------------------------------------
+
+Generate a professional cold email that works for ANY recipient — not just hiring teams.
+The recipient could be a recruiter, a hiring manager, a senior engineer, a team lead, or
+a mutual connection found on LinkedIn. Write it so it reads naturally regardless of who opens it.
+
+- Subject line: specific and role-focused, no buzzwords
+- Greeting: ALWAYS use "Hi [Recipient Name]," — never "Hi Hiring Team,", "Dear Hiring Manager,",
+  "To Whom It May Concern," or any other assumed-role salutation
+- Opening: reference the specific role and company
+- Body: 2-3 sentences only — align candidate's relevant experience with the role (based ONLY on resume)
+- Closing: one soft ask — a brief call, coffee chat, or referral — keep it low-pressure
+- Sign-off: "Best," followed by a blank line (candidate fills their name)
+- Total length: 4-6 sentences maximum
+
+Placeholders:
+- Use ONLY [Recipient Name] for the greeting
+- Do NOT use [Your Name], [Company Name], [Position], or any other placeholder
+- Do NOT invent or assume the recipient's name or role
+
+--------------------------------------------------
 QUALITY GUIDELINES
 --------------------------------------------------
 
@@ -479,11 +544,14 @@ QUALITY GUIDELINES
 `;
 
   try {
-    const message = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }],
-    });
+    const message = await client.messages.create(
+      {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 2048,
+        messages: [{ role: "user", content: prompt }],
+      },
+      { timeout: 30_000 },
+    );
 
     let raw = message.content.map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
     let parsed;
@@ -499,27 +567,28 @@ QUALITY GUIDELINES
       parsed = JSON.parse(raw);
     }
 
-    // Deduct 1 credit for authenticated users and return updated balance
-    let creditsRemaining = null;
+    // Log credit transaction and save analysis to history
     if (req.user) {
-      try {
-        const result = await query(
-          "UPDATE credits SET balance = balance - 1, updated_at = NOW() WHERE user_id = $1 RETURNING balance",
-          [req.user.id]
-        );
-        creditsRemaining = result.rows[0]?.balance ?? null;
-        await query(
-          "INSERT INTO credit_txns (user_id, delta, reason) VALUES ($1, -1, 'analysis')",
-          [req.user.id]
-        );
-      } catch (err) {
-        console.error("Credit deduction error:", err.message);
-        // Non-fatal: user still gets their analysis result
-      }
+      await query(
+        "INSERT INTO credit_txns (user_id, delta, reason) VALUES ($1, -1, 'analysis')",
+        [req.user.id]
+      ).catch((e) => console.error("Credit txn log error:", e.message));
+
+      await query(
+        "INSERT INTO analysis_history (user_id, job_title, company, match_score, match_label, result) VALUES ($1, $2, $3, $4, $5, $6)",
+        [req.user.id, parsed.jobTitle || "", parsed.company || "", parsed.matchScore ?? 0, parsed.matchLabel || "", parsed]
+      ).catch((e) => console.error("History save error:", e.message));
     }
 
     res.json({ ...parsed, creditsRemaining });
   } catch (err) {
+    // Refund credit if the AI call failed after we already deducted
+    if (req.user && creditsRemaining !== null) {
+      await query(
+        "UPDATE credits SET balance = balance + 1, updated_at = NOW() WHERE user_id = $1",
+        [req.user.id]
+      ).catch((e) => console.error("Credit refund error:", e.message));
+    }
     console.error("Analyze error:", err.message);
     res.status(500).json({ error: "Analysis failed: " + err.message });
   }
@@ -715,11 +784,14 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
   }
 
   try {
-    const message = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 4096,
-      messages: [{ role: "user", content: IMPORT_PROMPT(text) }],
-    });
+    const message = await client.messages.create(
+      {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 4096,
+        messages: [{ role: "user", content: IMPORT_PROMPT(text) }],
+      },
+      { timeout: 30_000 },
+    );
 
     let raw = message.content.map((b) => b.text || "").join("").trim();
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -753,8 +825,9 @@ const PACKAGES = {
   power:   { credits: 40, usd_cents: 1400, inr_paise: 99900, name: "40 Credits – Power" },
 };
 
-// In-memory cache: ip → 'usd' | 'inr', evicted after 24h
+// In-memory cache: ip → 'usd' | 'inr', evicted after 24h, capped at 10k entries
 const _ipCurrencyCache = new Map();
+const IP_CACHE_MAX = 10_000;
 
 async function getCurrencyForIP(ip) {
   // Strip IPv6-mapped IPv4 prefix (e.g. ::ffff:1.2.3.4 → 1.2.3.4)
@@ -766,6 +839,9 @@ async function getCurrencyForIP(ip) {
   try {
     const { data } = await axios.get(`https://ipapi.co/${clean}/json/`, { timeout: 3000 });
     const currency = data.country_code === "IN" ? "inr" : "usd";
+    if (_ipCurrencyCache.size >= IP_CACHE_MAX) {
+      _ipCurrencyCache.delete(_ipCurrencyCache.keys().next().value); // evict oldest
+    }
     _ipCurrencyCache.set(clean, currency);
     setTimeout(() => _ipCurrencyCache.delete(clean), 24 * 60 * 60 * 1000);
     return currency;
@@ -854,6 +930,36 @@ app.post("/api/credits/checkout", requireAuth, async (req, res) => {
   }
 });
 
+// ── Analysis history routes ────────────────────────────────────────────────────
+
+app.get("/api/analyses", requireAuth, async (req, res) => {
+  try {
+    const result = await query(
+      "SELECT id, job_title, company, match_score, match_label, result, created_at FROM analysis_history WHERE user_id = $1 ORDER BY created_at DESC LIMIT 30",
+      [req.user.id]
+    );
+    res.json({ analyses: result.rows });
+  } catch (err) {
+    console.error("Get analyses error:", err.message);
+    res.status(500).json({ error: "Failed to fetch analysis history" });
+  }
+});
+
+app.delete("/api/analyses/:id", requireAuth, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: "Invalid id" });
+  try {
+    await query(
+      "DELETE FROM analysis_history WHERE id = $1 AND user_id = $2",
+      [id, req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Delete analysis error:", err.message);
+    res.status(500).json({ error: "Failed to delete analysis" });
+  }
+});
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
@@ -877,15 +983,32 @@ if (process.env.SERVE_STATIC === "true") {
   });
 }
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// ── Start + graceful shutdown ─────────────────────────────────────────────────
+
+let server;
 
 initSchema()
   .then(() => {
-    app.listen(PORT, () =>
-      console.error(`CoPilot backend running on http://localhost:${PORT}`)
+    server = app.listen(PORT, () =>
+      console.log(`CoPilot backend running on http://localhost:${PORT}`)
     );
   })
   .catch((err) => {
     console.error("Failed to initialize database schema:", err.message);
     process.exit(1);
   });
+
+function shutdown(signal) {
+  console.log(`${signal} received — shutting down gracefully`);
+  if (server) {
+    server.close(() => {
+      pool.end().then(() => process.exit(0)).catch(() => process.exit(1));
+    });
+    setTimeout(() => process.exit(1), 10_000).unref(); // force-exit after 10s
+  } else {
+    process.exit(0);
+  }
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT",  () => shutdown("SIGINT"));

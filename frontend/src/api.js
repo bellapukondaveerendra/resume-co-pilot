@@ -82,4 +82,10 @@ export const api = {
 
   checkout: (pkg, token) =>
     req("POST", "/credits/checkout", { package: pkg }, token),
+
+  getAnalyses: (token) =>
+    req("GET", "/analyses", null, token),
+
+  deleteAnalysis: (id, token) =>
+    req("DELETE", `/analyses/${id}`, null, token),
 };

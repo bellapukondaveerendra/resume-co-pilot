@@ -67,8 +67,26 @@ export async function initSchema() {
       )
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS analysis_history (
+        id          SERIAL PRIMARY KEY,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        job_title   TEXT NOT NULL DEFAULT '',
+        company     TEXT NOT NULL DEFAULT '',
+        match_score INTEGER NOT NULL DEFAULT 0,
+        match_label TEXT NOT NULL DEFAULT '',
+        result      JSONB NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Indexes for common query patterns
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_resumes_user_id        ON resumes(user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_credit_txns_user_id    ON credit_txns(user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_analysis_history_user  ON analysis_history(user_id, created_at DESC)`);
+
     await client.query("COMMIT");
-    console.error("Database schema initialized");
+    console.log("Database schema initialized");
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

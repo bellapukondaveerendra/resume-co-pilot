@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import React, { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { EMPTY_RESUME, normalizeResume, resumeToHtml, resumeToPlainText } from "./resumeSchema.js";
 import ResumeEditor from "./ResumeEditor.jsx";
@@ -33,6 +33,33 @@ const PREVIEW_CSS = `
   .detail-lines{margin-top:3px;font-size:12px;line-height:1.35}
   .sep{color:#666}
 `;
+
+// ── Error boundary ────────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(err, info) { console.error("Render error:", err, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ maxWidth: 480, margin: "80px auto", padding: "40px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 36, marginBottom: 16 }}>⚠️</div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: "#111827", marginBottom: 8 }}>Something went wrong</h2>
+          <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 24 }}>
+            An unexpected error occurred. Please refresh the page.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ background: "#2563EB", border: "none", borderRadius: 8, color: "#fff", fontFamily: "'Roboto',sans-serif", fontWeight: 700, fontSize: 14, padding: "10px 24px", cursor: "pointer" }}
+          >
+            Refresh page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ── Shared UI primitives ──────────────────────────────────────────────────────
 function PrimaryBtn({ children, onClick, disabled, style = {} }) {
@@ -150,6 +177,26 @@ function applyEditToResume(resume, edit) {
   };
   const clone = JSON.parse(JSON.stringify(resume));
 
+  if (edit.type === "ADD") {
+    if (!edit.target) return null; // no target = copy-only (backward compatible)
+    const { section, name } = edit.target;
+    if (section === "experience") {
+      const entry = clone.experience.find(
+        (e) => matches(e.company, name) || matches(e.role, name)
+      );
+      if (!entry) return null;
+      entry.points.push(edit.statement);
+      return clone;
+    }
+    if (section === "projects") {
+      const entry = clone.projects.find((p) => matches(p.name, name));
+      if (!entry) return null;
+      entry.points.push(edit.statement);
+      return clone;
+    }
+    return null;
+  }
+
   if (edit.type === "EDIT") {
     for (const e of clone.experience) {
       const i = e.points.findIndex((p) => matches(p, edit.from));
@@ -200,7 +247,11 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
   };
   const c        = C[edit.type] || C.ADD;
   const copyText = edit.type === "EDIT" ? edit.to : edit.statement;
-  const canApply = editorAvailable && (edit.type === "EDIT" || edit.type === "DELETE");
+  const canApply = editorAvailable && (
+    edit.type === "EDIT" ||
+    edit.type === "DELETE" ||
+    (edit.type === "ADD" && !!edit.target)
+  );
 
   const handleApply = () => {
     const ok = onApply();
@@ -235,7 +286,20 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
         </div>
       </div>
 
-      {edit.type === "ADD"  && <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.statement}</p>}
+      {edit.type === "ADD" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.statement}</p>
+          {edit.target && (
+            <span style={{ fontSize: 10, color: "#059669", fontFamily: "'Space Mono',monospace", display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ opacity: 0.5 }}>→</span>
+              {edit.target.name}
+              <span style={{ opacity: 0.5, fontFamily: "'Roboto',sans-serif", fontStyle: "italic" }}>
+                ({edit.target.section})
+              </span>
+            </span>
+          )}
+        </div>
+      )}
       {edit.type === "EDIT" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           <p style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.5, margin: 0, textDecoration: "line-through", fontStyle: "italic" }}>{edit.from}</p>
@@ -278,9 +342,11 @@ function AnalysisInsights({ analysis, onReset, onApply, appliedEdits = new Set()
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 2 }}>
             {analysis.edits.length} suggested {analysis.edits.length === 1 ? "change" : "changes"}
-            <span style={{ color: "#9CA3AF", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-              {" "}— ADD cards are copy-only
-            </span>
+            {analysis.edits.some((e) => e.type === "ADD" && !e.target) && (
+              <span style={{ color: "#9CA3AF", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
+                {" "}— some ADD cards are copy-only
+              </span>
+            )}
           </p>
           {analysis.edits.map((edit, i) => (
             <EditCard
@@ -343,6 +409,12 @@ function OutreachSection({ analysis, onGoAnalysis }) {
             <CopyBtn text={`Subject: ${analysis.coldEmail.subject}\n\n${analysis.coldEmail.body}`} />
           </div>
           <div style={{ padding: "12px 14px" }}>
+            <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 10, display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ background: "#EDE9FE", color: "#7C3AED", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontFamily: "'Space Mono',monospace", fontWeight: 700 }}>
+                [Recipient Name]
+              </span>
+              <span>→ replace with the actual person's name before sending.</span>
+            </p>
             <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 12, border: "1px solid #E5E7EB" }}>
               <p style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
                 Subject: {analysis.coldEmail.subject}
@@ -776,7 +848,9 @@ function AuthPage({ mode, onAuth, onToggle, onBack }) {
   const [error, setError]       = useState("");
   const inputStyle = { width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "12px 16px", outline: "none", boxSizing: "border-box" };
   const submit = async () => {
-    setError(""); if (!email || !password) { setError("Email and password required."); return; }
+    setError("");
+    if (!email || !password) { setError("Email and password required."); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { setError("Please enter a valid email address."); return; }
     setLoading(true);
     try { const data = mode === "login" ? await api.login(email, password) : await api.register(email, password); onAuth(data); }
     catch (err) { setError(err.message); }
@@ -980,6 +1054,78 @@ const NAV = {
   },
 };
 
+// ── History panel ─────────────────────────────────────────────────────────────
+function HistoryPanel({ auth, onLoad }) {
+  const [items, setItems]     = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState("");
+
+  useEffect(() => {
+    api.getAnalyses(auth.token)
+      .then(({ analyses }) => setItems(analyses))
+      .catch(() => setError("Failed to load history."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleDelete = async (e, id) => {
+    e.stopPropagation();
+    try {
+      await api.deleteAnalysis(id, auth.token);
+      setItems((prev) => prev.filter((a) => a.id !== id));
+    } catch { /* ignore */ }
+  };
+
+  if (loading) return <div style={{ padding: "20px 0" }}><Spinner /></div>;
+  if (error)   return <p style={{ fontSize: 12, color: "#DC2626", padding: "12px 0" }}>{error}</p>;
+  if (!items.length) return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "20px 0", textAlign: "center" }}>
+      <p style={{ fontSize: 13, color: "#9CA3AF" }}>No history yet.</p>
+      <p style={{ fontSize: 12, color: "#D1D5DB" }}>Run your first analysis to see it here.</p>
+    </div>
+  );
+
+  const scoreColor = (s) => s >= 75 ? "#059669" : s >= 50 ? "#D97706" : "#DC2626";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {items.map((item) => (
+        <div
+          key={item.id}
+          onClick={() => onLoad(item.result)}
+          style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 12px", cursor: "pointer", transition: "border-color 0.15s" }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#93C5FD")}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#E5E7EB")}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+            <div style={{ minWidth: 0 }}>
+              <p style={{ fontSize: 12, fontWeight: 600, color: "#111827", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {item.job_title || "Unknown Role"}
+              </p>
+              <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 3 }}>{item.company || "—"}</p>
+              <p style={{ fontSize: 10, color: "#9CA3AF" }}>
+                {new Date(item.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+              <span style={{
+                fontFamily: "'Space Mono',monospace", fontSize: 14, fontWeight: 700,
+                color: scoreColor(item.match_score),
+              }}>
+                {item.match_score}%
+              </span>
+              <button
+                onClick={(e) => handleDelete(e, item.id)}
+                style={{ background: "none", border: "none", color: "#D1D5DB", cursor: "pointer", fontSize: 16, padding: "2px 4px", lineHeight: 1 }}
+                title="Delete"
+              >×</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Editor page — 3-stage flow ────────────────────────────────────────────────
 function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete }) {
   const [loadingResume, setLoadingResume]       = useState(true);
@@ -994,6 +1140,7 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
   const [importing, setImporting]               = useState(false);
   const [importError, setImportError]           = useState("");
   const [pendingImport, setPendingImport]       = useState(null);
+  const [leftTab, setLeftTab]                   = useState("analyze"); // "analyze" | "history"
   const [importSuccess, setImportSuccess]       = useState(false);
   const importSuccessTimer                      = useRef(null);
   const replaceFileRef                          = useRef();
@@ -1218,63 +1365,83 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
 
           <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
-            {/* LEFT — Analysis */}
+            {/* LEFT — Analysis + History */}
             <div style={{ flex: "0 0 45%", borderRight: "1px solid #E5E7EB", display: "flex", flexDirection: "column", background: "#F8FAFC", overflow: "hidden" }}>
-              <div style={{ padding: "8px 14px", borderBottom: "1px solid #E5E7EB", background: "#FFFFFF", flexShrink: 0 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#9CA3AF" }}>Analysis</span>
+              {/* Tab header */}
+              <div style={{ display: "flex", borderBottom: "1px solid #E5E7EB", background: "#FFFFFF", flexShrink: 0 }}>
+                <RightTab label="Analysis" active={leftTab === "analyze"} onClick={() => setLeftTab("analyze")} />
+                <RightTab label="History"  active={leftTab === "history"} onClick={() => setLeftTab("history")} />
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
 
-                {analysisStep === "idle" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    <p style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.6, margin: 0 }}>
-                      Paste a job description to score your resume and get edit suggestions you can apply directly.
-                    </p>
-                    {analysisError && (
-                      <p style={{ color: "#DC2626", fontSize: 12, margin: 0, background: "#FEF2F2", padding: "8px 12px", borderRadius: 6, border: "1px solid #FECACA" }}>{analysisError}</p>
-                    )}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job</span>
-                      <TabBar
-                        options={[{ value: "paste", label: "Paste JD" }, { value: "url", label: "Job URL (Coming Soon)" }]}
-                        value={inputMode}
-                        onChange={(val) => { if (val !== "url") setInputMode(val); }}
-                        disabledValues={["url"]}
-                      />
-                    </div>
-                    {inputMode === "paste" ? (
-                      <>
-                        <textarea style={{ ...jiStyle, minHeight: 140, resize: "vertical" }} placeholder="Paste the full job description here…" value={jobInput} onChange={(e) => setJobInput(e.target.value)} />
-                        <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>For best results, paste the full job description.</p>
-                      </>
-                    ) : (
-                      <div style={{ opacity: 0.5, pointerEvents: "none" }}>
-                        <input disabled style={{ ...jiStyle, cursor: "not-allowed" }} placeholder="https://jobs.lever.co/company/role-id" value="" readOnly />
-                        <p style={{ fontSize: 11, color: "#6B7280", marginTop: 8, lineHeight: 1.5 }}>We're working on reliable job extraction. For now, please paste the job description manually.</p>
-                      </div>
-                    )}
-                    <PrimaryBtn onClick={handleAnalyze} disabled={!jobInput.trim() || inputMode === "url"} style={{ width: "100%", padding: "11px" }}>
-                      Analyze →
-                    </PrimaryBtn>
-                    {creditBalance !== null && (
-                      <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
-                        ⚡ {creditBalance} credit{creditBalance === 1 ? "" : "s"} remaining
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {analysisStep === "loading" && <Spinner label="Analyzing your resume…" />}
-
-                {hasAnalysis && (
-                  <AnalysisInsights
-                    analysis={analysis}
-                    onReset={() => { setAnalysis(null); setAnalysisStep("idle"); }}
-                    onApply={handleApplyEdit}
-                    appliedEdits={appliedEdits}
+              {/* History tab */}
+              {leftTab === "history" && (
+                <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
+                  <HistoryPanel
+                    auth={auth}
+                    onLoad={(result) => {
+                      setAnalysis(result);
+                      setAnalysisStep("results");
+                      setAppliedEdits(new Set());
+                      setLeftTab("analyze");
+                    }}
                   />
-                )}
-              </div>
+                </div>
+              )}
+
+              {/* Analyze tab */}
+              {leftTab === "analyze" && (
+                <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
+                  {analysisStep === "idle" && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                      <p style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.6, margin: 0 }}>
+                        Paste a job description to score your resume and get edit suggestions you can apply directly.
+                      </p>
+                      {analysisError && (
+                        <p style={{ color: "#DC2626", fontSize: 12, margin: 0, background: "#FEF2F2", padding: "8px 12px", borderRadius: 6, border: "1px solid #FECACA" }}>{analysisError}</p>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job</span>
+                        <TabBar
+                          options={[{ value: "paste", label: "Paste JD" }, { value: "url", label: "Job URL (Coming Soon)" }]}
+                          value={inputMode}
+                          onChange={(val) => { if (val !== "url") setInputMode(val); }}
+                          disabledValues={["url"]}
+                        />
+                      </div>
+                      {inputMode === "paste" ? (
+                        <>
+                          <textarea style={{ ...jiStyle, minHeight: 140, resize: "vertical" }} placeholder="Paste the full job description here…" value={jobInput} onChange={(e) => setJobInput(e.target.value)} />
+                          <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>For best results, paste the full job description.</p>
+                        </>
+                      ) : (
+                        <div style={{ opacity: 0.5, pointerEvents: "none" }}>
+                          <input disabled style={{ ...jiStyle, cursor: "not-allowed" }} placeholder="https://jobs.lever.co/company/role-id" value="" readOnly />
+                          <p style={{ fontSize: 11, color: "#6B7280", marginTop: 8, lineHeight: 1.5 }}>We're working on reliable job extraction. For now, please paste the job description manually.</p>
+                        </div>
+                      )}
+                      <PrimaryBtn onClick={handleAnalyze} disabled={!jobInput.trim() || inputMode === "url"} style={{ width: "100%", padding: "11px" }}>
+                        Analyze →
+                      </PrimaryBtn>
+                      {creditBalance !== null && (
+                        <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
+                          ⚡ {creditBalance} credit{creditBalance === 1 ? "" : "s"} remaining
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {analysisStep === "loading" && <Spinner label="Analyzing your resume…" />}
+
+                  {hasAnalysis && (
+                    <AnalysisInsights
+                      analysis={analysis}
+                      onReset={() => { setAnalysis(null); setAnalysisStep("idle"); }}
+                      onApply={handleApplyEdit}
+                      appliedEdits={appliedEdits}
+                    />
+                  )}
+                </div>
+              )}
             </div>
 
             {/* RIGHT — Editor */}
@@ -1752,6 +1919,23 @@ export default function App() {
     else setCreditBalance(null);
   }, [auth?.token]);
 
+  // Sync page state with browser back/forward navigation
+  useEffect(() => {
+    const pathToPage = (path) => {
+      if (path === "/credits/success") return "credits-success";
+      if (path === "/credits/cancel")  return "credits-cancel";
+      if (path === "/pricing")         return "pricing";
+      if (path === "/contact")         return "contact";
+      if (path === "/privacy")         return "privacy";
+      if (path === "/terms")           return "terms";
+      if (path === "/refund")          return "refund";
+      return "home";
+    };
+    const handlePop = () => setPage(pathToPage(window.location.pathname));
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, []);
+
   const handleAuth = (data) => {
     setAuth(data); saveAuth(data); setPage("editor");
     // Balance will load via useEffect watching auth.token
@@ -1761,7 +1945,7 @@ export default function App() {
   const goRegister = () => { setAuthMode("register"); setPage("login"); };
 
   return (
-    <>
+    <ErrorBoundary>
       <style>{`
         ${FONTS}
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1859,6 +2043,6 @@ export default function App() {
 
         <Footer onNav={navigate} />
       </div>
-    </>
+    </ErrorBoundary>
   );
 }
