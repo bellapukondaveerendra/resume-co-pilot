@@ -371,13 +371,28 @@ function Spinner({ label }) {
 
 // ── BuyCreditsModal ───────────────────────────────────────────────────────────
 function BuyCreditsModal({ auth, onClose }) {
-  const [loadingPkg, setLoadingPkg] = useState(null);
+  const [loadingPkg, setLoadingPkg]   = useState(null);
+  const [currencyData, setCurrencyData] = useState(null);
 
-  const packages = [
-    { key: "starter", label: "Starter",   credits: 5,  price: "$2.50",  perAnalysis: "$0.50/analysis" },
-    { key: "pro",     label: "Pro",        credits: 15, price: "$6.00",  perAnalysis: "$0.40/analysis" },
-    { key: "power",   label: "Power",      credits: 40, price: "$14.00", perAnalysis: "$0.35/analysis", best: true },
-  ];
+  useEffect(() => {
+    api.getCurrency()
+      .then(setCurrencyData)
+      .catch(() => setCurrencyData({
+        currency: "usd",
+        packages: [
+          { key: "starter", credits: 5,  price: "$2.50",  per_analysis: "$0.50/analysis" },
+          { key: "pro",     credits: 15, price: "$6.00",  per_analysis: "$0.40/analysis" },
+          { key: "power",   credits: 40, price: "$14.00", per_analysis: "$0.35/analysis" },
+        ],
+      }));
+  }, []);
+
+  const LABELS = { starter: "Starter", pro: "Pro", power: "Power" };
+  const packages = (currencyData?.packages ?? []).map((p) => ({
+    ...p,
+    label: LABELS[p.key] ?? p.key,
+    best: p.key === "power",
+  }));
 
   const handleBuy = async (pkg) => {
     setLoadingPkg(pkg);
@@ -413,7 +428,11 @@ function BuyCreditsModal({ auth, onClose }) {
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-          {packages.map((pkg) => {
+          {!currencyData ? (
+            [1, 2, 3].map((n) => (
+              <div key={n} style={{ border: "1px solid #E5E7EB", borderRadius: 12, padding: "18px 14px", height: 160, background: "#F9FAFB", animation: "pulse 1.2s ease-in-out infinite" }} />
+            ))
+          ) : packages.map((pkg) => {
             const isLoading = loadingPkg === pkg.key;
             return (
               <div
@@ -434,7 +453,7 @@ function BuyCreditsModal({ auth, onClose }) {
                 <div style={{ fontSize: 22, fontWeight: 700, color: "#2563EB", fontFamily: "'Space Mono',monospace" }}>{pkg.credits}</div>
                 <div style={{ fontSize: 11, color: "#6B7280" }}>credits</div>
                 <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>{pkg.price}</div>
-                <div style={{ fontSize: 11, color: "#9CA3AF" }}>{pkg.perAnalysis}</div>
+                <div style={{ fontSize: 11, color: "#9CA3AF" }}>{pkg.per_analysis}</div>
                 <button
                   onClick={() => !loadingPkg && handleBuy(pkg.key)}
                   disabled={!!loadingPkg}
@@ -583,9 +602,9 @@ function JobInputForm({ onAnalyze, loading }) {
 }
 
 // ── Home page ─────────────────────────────────────────────────────────────────
-function HomePage({ onGuest, onLogin, auth, onGoEditor }) {
+function HomePage({ onGuest, onLogin, auth, onGoEditor, onPricing }) {
   return (
-    <div style={{ maxWidth: 680, margin: "0 auto", padding: "60px 20px" }}>
+    <div style={{ maxWidth: 680, margin: "0 auto", padding: "60px 20px 100px" }}>
       <div style={{ textAlign: "center", marginBottom: 48 }}>
         <div style={{ display: "inline-block", fontFamily: "'Space Mono',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", padding: "4px 14px", borderRadius: 20, marginBottom: 18 }}>
           AI Job Application Co-Pilot
@@ -593,9 +612,15 @@ function HomePage({ onGuest, onLogin, auth, onGoEditor }) {
         <h1 style={{ fontSize: "clamp(28px,4.5vw,44px)", fontWeight: 700, lineHeight: 1.15, marginBottom: 14, letterSpacing: "-0.02em", color: "#111827" }}>
           Land the job,<br /><span style={{ color: "#059669" }}>not just the interview.</span>
         </h1>
-        <p style={{ color: "#6B7280", fontSize: 15, lineHeight: 1.7, maxWidth: 440, margin: "0 auto" }}>
+        <p style={{ color: "#6B7280", fontSize: 15, lineHeight: 1.7, maxWidth: 440, margin: "0 auto 20px" }}>
           Instant resume analysis, keyword gap detection, tailored edits, and outreach messages — all from one paste.
         </p>
+        <button
+          onClick={onPricing}
+          style={{ background: "none", border: "none", color: "#2563EB", fontSize: 13, cursor: "pointer", fontFamily: "'Roboto',sans-serif", padding: 0, textDecoration: "underline", textDecorationColor: "#BFDBFE" }}
+        >
+          View pricing →
+        </button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: auth ? "1fr" : "1fr 1fr", gap: 16, maxWidth: auth ? 400 : "100%", margin: auth ? "0 auto" : undefined }}>
         {!auth && (
@@ -1336,6 +1361,356 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
   return null;
 }
 
+// ── Legal helpers ─────────────────────────────────────────────────────────────
+function LegalPage({ title, subtitle, children, onBack }) {
+  return (
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "48px 24px 100px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", marginBottom: 28, fontFamily: "'Roboto',sans-serif", padding: 0 }}>← Back</button>
+      <h1 style={{ fontSize: 28, fontWeight: 700, color: "#111827", marginBottom: 6 }}>{title}</h1>
+      {subtitle && <p style={{ fontSize: 14, color: "#6B7280", marginBottom: 6 }}>{subtitle}</p>}
+      <div style={{ fontSize: 12, color: "#9CA3AF", marginBottom: 40, borderBottom: "1px solid #E5E7EB", paddingBottom: 20 }}>Last updated: May 2026</div>
+      <div style={{ fontSize: 14, color: "#374151", lineHeight: 1.9, display: "flex", flexDirection: "column", gap: 32 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function L({ title, children }) {
+  return (
+    <div>
+      <h2 style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 10, paddingBottom: 6, borderBottom: "1px solid #F3F4F6" }}>{title}</h2>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ── Contact page ──────────────────────────────────────────────────────────────
+function ContactPage({ onBack }) {
+  return (
+    <LegalPage title="Contact Us" subtitle="We're here to help with any questions about your account, payments, or the service." onBack={onBack}>
+      <L title="Email Support">
+        <p>Send us an email and we'll respond within <strong>48 business hours</strong>.</p>
+        <p>
+          <a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB", textDecoration: "none", fontWeight: 600 }}>
+            support@resumecopilot.in
+          </a>
+        </p>
+      </L>
+      <L title="What to Include">
+        <p>To help us resolve your issue quickly, please include:</p>
+        <ul style={{ paddingLeft: 20, display: "flex", flexDirection: "column", gap: 4 }}>
+          <li>The email address associated with your account</li>
+          <li>A brief description of your issue or question</li>
+          <li>Your Stripe payment receipt number (if related to billing)</li>
+        </ul>
+      </L>
+      <L title="Business Details">
+        <p><strong>Resume CoPilot</strong></p>
+        <p>A product of Ashborn Technologies</p>
+        <p>India</p>
+        <p style={{ marginTop: 8, fontSize: 13, color: "#6B7280" }}>
+          For billing disputes, please contact us before initiating a chargeback — we will resolve all valid issues promptly.
+        </p>
+      </L>
+    </LegalPage>
+  );
+}
+
+// ── Pricing page ──────────────────────────────────────────────────────────────
+function PricingPage({ onBack, onSignUp }) {
+  const [currencyData, setCurrencyData] = useState(null);
+
+  useEffect(() => {
+    api.getCurrency()
+      .then(setCurrencyData)
+      .catch(() => setCurrencyData({
+        currency: "usd",
+        packages: [
+          { key: "starter", credits: 5,  price: "$2.50",  per_analysis: "$0.50/analysis" },
+          { key: "pro",     credits: 15, price: "$6.00",  per_analysis: "$0.40/analysis" },
+          { key: "power",   credits: 40, price: "$14.00", per_analysis: "$0.35/analysis" },
+        ],
+      }));
+  }, []);
+
+  const PKG_META = {
+    starter: { label: "Starter", desc: "Great for a single job search sprint." },
+    pro:     { label: "Pro",     desc: "Best for an active multi-week search." },
+    power:   { label: "Power",   desc: "Most value for serious job seekers.", best: true },
+  };
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto", padding: "60px 24px 100px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", marginBottom: 32, fontFamily: "'Roboto',sans-serif", padding: 0 }}>← Back</button>
+      <div style={{ textAlign: "center", marginBottom: 48 }}>
+        <h1 style={{ fontSize: 32, fontWeight: 700, color: "#111827", marginBottom: 12 }}>Simple, transparent pricing</h1>
+        <p style={{ fontSize: 15, color: "#6B7280", maxWidth: 420, margin: "0 auto" }}>
+          Buy credits as you need them. No subscriptions, no hidden fees. Each analysis costs 1 credit.
+        </p>
+        {currencyData && (
+          <div style={{ marginTop: 10, fontSize: 12, color: "#9CA3AF" }}>
+            Prices shown in {currencyData.currency === "inr" ? "Indian Rupees (₹)" : "US Dollars ($)"} based on your location.
+          </div>
+        )}
+      </div>
+
+      {!currencyData ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+          {[1,2,3].map(n => <div key={n} style={{ height: 260, background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 16, animation: "pulse 1.2s ease-in-out infinite" }} />)}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
+          {currencyData.packages.map((pkg) => {
+            const meta = PKG_META[pkg.key] ?? { label: pkg.key, desc: "" };
+            return (
+              <div key={pkg.key} style={{ border: meta.best ? "2px solid #2563EB" : "1px solid #E5E7EB", borderRadius: 16, padding: "28px 24px", background: meta.best ? "#EFF6FF" : "#FFFFFF", position: "relative", display: "flex", flexDirection: "column", gap: 12 }}>
+                {meta.best && (
+                  <div style={{ position: "absolute", top: -12, left: "50%", transform: "translateX(-50%)", background: "#2563EB", color: "#FFFFFF", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", padding: "3px 14px", borderRadius: 12, whiteSpace: "nowrap" }}>
+                    Best Value
+                  </div>
+                )}
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>{meta.label}</div>
+                <div style={{ fontSize: 13, color: "#6B7280", lineHeight: 1.5 }}>{meta.desc}</div>
+                <div style={{ borderTop: "1px solid #E5E7EB", paddingTop: 16, marginTop: 4 }}>
+                  <span style={{ fontSize: 32, fontWeight: 700, color: "#111827", fontFamily: "'Space Mono',monospace" }}>{pkg.price}</span>
+                </div>
+                <div style={{ fontSize: 13, color: "#2563EB", fontWeight: 600 }}>{pkg.credits} analyses</div>
+                <div style={{ fontSize: 12, color: "#9CA3AF" }}>{pkg.per_analysis}</div>
+                <button
+                  onClick={onSignUp}
+                  style={{ marginTop: "auto", background: meta.best ? "#2563EB" : "transparent", color: meta.best ? "#FFFFFF" : "#2563EB", border: meta.best ? "none" : "1px solid #BFDBFE", borderRadius: 10, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Roboto',sans-serif" }}
+                >
+                  Get started →
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 48, background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: "28px 32px" }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 16 }}>What you get with every credit</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {[
+            ["Match score", "See how well your resume fits the job (0–100%)."],
+            ["Keyword gap analysis", "Missing keywords that ATS systems look for."],
+            ["Tailored suggestions", "Exact edits to improve your resume for that role."],
+            ["Outreach messages", "Ready-to-send LinkedIn note + cold email draft."],
+          ].map(([title, desc]) => (
+            <div key={title} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <div style={{ width: 18, height: 18, background: "#D1FAE5", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+                <span style={{ fontSize: 10, color: "#059669" }}>✓</span>
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{title}</div>
+                <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.5 }}>{desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 24, textAlign: "center", fontSize: 12, color: "#9CA3AF" }}>
+        Credits never expire. Secure payment via Stripe.{" "}
+        <span style={{ color: "#6B7280" }}>Questions?{" "}</span>
+        <a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB", textDecoration: "none" }}>support@resumecopilot.in</a>
+      </div>
+    </div>
+  );
+}
+
+// ── Privacy Policy ────────────────────────────────────────────────────────────
+function PrivacyPage({ onBack }) {
+  return (
+    <LegalPage title="Privacy Policy" subtitle="Resume CoPilot is committed to protecting your personal data." onBack={onBack}>
+      <L title="1. Who We Are">
+        <p>Resume CoPilot ("we", "us", "our") is a product of <strong>Ashborn Technologies</strong>, India. We operate the website and AI-powered resume analysis service at this domain.</p>
+        <p>Contact: <a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB" }}>support@resumecopilot.in</a></p>
+      </L>
+      <L title="2. Information We Collect">
+        <p><strong>Account information:</strong> Your email address and a hashed password when you register.</p>
+        <p><strong>Resume and job data:</strong> Resume text and job descriptions you submit for analysis. This content is processed by our AI service and stored to provide the editor and history features.</p>
+        <p><strong>Payment information:</strong> We do not store card details. All payment processing is handled by Stripe, Inc. We receive only a payment confirmation and your Stripe customer reference.</p>
+        <p><strong>Usage data:</strong> Your IP address (used for regional pricing and guest rate-limiting), browser type, and general usage patterns.</p>
+      </L>
+      <L title="3. How We Use Your Information">
+        <ul style={{ paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
+          <li>To provide, operate, and improve the Resume CoPilot service</li>
+          <li>To process payments and manage your credit balance</li>
+          <li>To detect and prevent fraud and abuse</li>
+          <li>To respond to support requests</li>
+          <li>To determine regional pricing (IP-based, not stored beyond the session)</li>
+        </ul>
+        <p>We do not sell, rent, or share your personal data with third parties for marketing purposes.</p>
+      </L>
+      <L title="4. Third-Party Services">
+        <p>We use the following third-party services to operate Resume CoPilot:</p>
+        <ul style={{ paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
+          <li><strong>Stripe</strong> — payment processing. Stripe's privacy policy applies to all payment data. See <a href="https://stripe.com/privacy" target="_blank" rel="noopener noreferrer" style={{ color: "#2563EB" }}>stripe.com/privacy</a>.</li>
+          <li><strong>Anthropic (Claude AI)</strong> — resume analysis. Your resume text and job descriptions are sent to Anthropic's API for processing. See <a href="https://www.anthropic.com/privacy" target="_blank" rel="noopener noreferrer" style={{ color: "#2563EB" }}>anthropic.com/privacy</a>.</li>
+          <li><strong>Neon (PostgreSQL)</strong> — secure cloud database for storing your account and resume data.</li>
+          <li><strong>ipapi.co</strong> — IP-based geolocation used solely to determine your currency for pricing. Your IP is not stored by us beyond a 24-hour in-memory cache.</li>
+        </ul>
+      </L>
+      <L title="5. Data Retention">
+        <p>Your account data and resumes are retained for as long as your account is active. You may request deletion of your account and all associated data at any time by emailing <a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB" }}>support@resumecopilot.in</a>.</p>
+        <p>Anonymized usage logs may be retained for up to 90 days for debugging and service improvement.</p>
+      </L>
+      <L title="6. Data Security">
+        <p>All data is transmitted over HTTPS. Passwords are stored as bcrypt hashes and are never stored in plain text. We use industry-standard security practices to protect your data.</p>
+        <p>However, no internet transmission is 100% secure. If you suspect unauthorized access to your account, contact us immediately.</p>
+      </L>
+      <L title="7. Your Rights">
+        <p>Under India's Digital Personal Data Protection Act (DPDPA) 2023 and applicable laws, you have the right to:</p>
+        <ul style={{ paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
+          <li>Access the personal data we hold about you</li>
+          <li>Correct inaccurate personal data</li>
+          <li>Request deletion of your personal data</li>
+          <li>Withdraw consent for data processing</li>
+        </ul>
+        <p>To exercise any of these rights, email <a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB" }}>support@resumecopilot.in</a>. We will respond within 30 days.</p>
+      </L>
+      <L title="8. Cookies">
+        <p>Resume CoPilot uses only a single authentication token stored in your browser's <code style={{ background: "#F3F4F6", padding: "1px 5px", borderRadius: 4 }}>localStorage</code> to keep you logged in. We do not use advertising cookies or third-party tracking cookies.</p>
+      </L>
+      <L title="9. Changes to This Policy">
+        <p>We may update this Privacy Policy from time to time. The "Last updated" date at the top of this page will reflect any changes. Continued use of the service after changes constitutes acceptance.</p>
+      </L>
+    </LegalPage>
+  );
+}
+
+// ── Terms of Service ──────────────────────────────────────────────────────────
+function TermsPage({ onBack }) {
+  return (
+    <LegalPage title="Terms of Service" subtitle="Please read these terms carefully before using Resume CoPilot." onBack={onBack}>
+      <L title="1. Acceptance of Terms">
+        <p>By creating an account or using Resume CoPilot, you agree to be bound by these Terms of Service. If you do not agree, do not use the service.</p>
+      </L>
+      <L title="2. Description of Service">
+        <p>Resume CoPilot is an AI-powered tool that helps users analyze their resumes against job descriptions, identify keyword gaps, generate tailored suggestions, and draft outreach messages. The service is provided "as is" and results are generated by AI — they are suggestions, not guarantees of employment outcomes.</p>
+      </L>
+      <L title="3. Account Registration">
+        <p>You must provide a valid email address to create an account. You are responsible for maintaining the confidentiality of your account credentials and for all activity under your account. You must be at least 18 years old to use the service.</p>
+      </L>
+      <L title="4. Credits and Payments">
+        <p>Resume CoPilot operates on a credit system. Each AI analysis costs 1 credit. New accounts receive 5 free credits upon registration. Additional credits can be purchased through our Stripe-powered checkout.</p>
+        <p>Prices are displayed in INR (Indian Rupees) for users in India and USD (US Dollars) for international users, based on your location at the time of purchase.</p>
+        <p>All payments are processed by Stripe and are subject to Stripe's terms of service. We do not store your payment card information.</p>
+        <p>Credits do not expire. Credits are non-transferable between accounts.</p>
+      </L>
+      <L title="5. Acceptable Use">
+        <p>You agree not to:</p>
+        <ul style={{ paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
+          <li>Use the service to process content you do not have the right to share</li>
+          <li>Attempt to reverse-engineer or scrape the service</li>
+          <li>Use automated tools to abuse the free tier or bypass rate limits</li>
+          <li>Submit content that is illegal, harmful, or violates third-party rights</li>
+          <li>Resell or sublicense access to the service</li>
+        </ul>
+      </L>
+      <L title="6. AI-Generated Content">
+        <p>Outputs generated by Resume CoPilot are produced by an AI language model and may contain inaccuracies. You are solely responsible for reviewing, editing, and verifying any content before using it in a job application. Resume CoPilot does not guarantee employment outcomes.</p>
+      </L>
+      <L title="7. Intellectual Property">
+        <p>The Resume CoPilot platform, its design, and underlying technology are owned by Ashborn Technologies. You retain ownership of the resume content and job descriptions you submit.</p>
+        <p>By using the service, you grant us a limited, non-exclusive license to process your submitted content solely for the purpose of providing the service to you.</p>
+      </L>
+      <L title="8. Termination">
+        <p>We reserve the right to suspend or terminate accounts that violate these terms. You may delete your account at any time by contacting us. Upon termination, unused credits are forfeited unless otherwise required by law.</p>
+      </L>
+      <L title="9. Disclaimer of Warranties">
+        <p>The service is provided "as is" without warranties of any kind, express or implied. We do not warrant that the service will be uninterrupted, error-free, or meet your specific requirements.</p>
+      </L>
+      <L title="10. Limitation of Liability">
+        <p>To the maximum extent permitted by law, Ashborn Technologies shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of Resume CoPilot. Our total liability to you for any claim shall not exceed the amount you paid us in the 30 days preceding the claim.</p>
+      </L>
+      <L title="11. Governing Law">
+        <p>These Terms are governed by the laws of India. Any disputes shall be subject to the exclusive jurisdiction of the courts in India.</p>
+      </L>
+      <L title="12. Changes to Terms">
+        <p>We may update these Terms at any time. Continued use of the service after changes are posted constitutes your acceptance of the new Terms. We will notify registered users of material changes via email.</p>
+      </L>
+      <L title="13. Contact">
+        <p>For any questions about these Terms, contact us at <a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB" }}>support@resumecopilot.in</a>.</p>
+      </L>
+    </LegalPage>
+  );
+}
+
+// ── Refund Policy ─────────────────────────────────────────────────────────────
+function RefundPage({ onBack }) {
+  return (
+    <LegalPage title="Refund Policy" subtitle="We want you to be satisfied with Resume CoPilot." onBack={onBack}>
+      <L title="Digital Credits — General Policy">
+        <p>Resume CoPilot sells digital credits that are consumed when you run an AI analysis. Because credits are a digital consumable, <strong>used credits are non-refundable</strong> once an analysis has been successfully delivered.</p>
+      </L>
+      <L title="When Refunds Are Available">
+        <p>We offer refunds in the following situations:</p>
+        <ul style={{ paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }}>
+          <li>
+            <strong>Unused credits within 7 days of purchase:</strong> If you purchased credits and have not used any of them, you may request a full refund within 7 days of the purchase date.
+          </li>
+          <li>
+            <strong>Technical failure:</strong> If a credit was deducted but no analysis result was delivered due to a confirmed technical error on our end, we will restore the credit or issue a refund.
+          </li>
+          <li>
+            <strong>Duplicate charges:</strong> If you were charged more than once for the same transaction, we will refund the duplicate charge immediately upon verification.
+          </li>
+        </ul>
+      </L>
+      <L title="How to Request a Refund">
+        <p>Email us at <a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB", fontWeight: 600 }}>support@resumecopilot.in</a> with:</p>
+        <ul style={{ paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
+          <li>Your registered email address</li>
+          <li>The Stripe payment receipt / transaction ID</li>
+          <li>The reason for your refund request</li>
+        </ul>
+      </L>
+      <L title="Processing Time">
+        <p>We will review and respond to all refund requests within <strong>3 business days</strong>. Approved refunds are processed through Stripe and typically appear in your account within 5–10 business days depending on your bank or card issuer.</p>
+      </L>
+      <L title="Chargebacks">
+        <p>We strongly encourage you to contact us before initiating a chargeback with your bank. We resolve valid disputes promptly. Unwarranted chargebacks may result in account suspension.</p>
+      </L>
+      <L title="Contact">
+        <p><a href="mailto:support@resumecopilot.in" style={{ color: "#2563EB" }}>support@resumecopilot.in</a></p>
+      </L>
+    </LegalPage>
+  );
+}
+
+// ── Footer ────────────────────────────────────────────────────────────────────
+function Footer({ onNav }) {
+  const link = (label, page, url) => (
+    <button
+      onClick={() => { onNav(page, url); window.scrollTo(0, 0); }}
+      style={{ background: "none", border: "none", color: "#9CA3AF", cursor: "pointer", fontSize: 12, padding: 0, fontFamily: "'Roboto',sans-serif", textDecoration: "none" }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = "#6B7280")}
+      onMouseLeave={(e) => (e.currentTarget.style.color = "#9CA3AF")}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ borderTop: "1px solid #E5E7EB", background: "#FFFFFF", padding: "24px 28px", marginTop: "auto" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
+        <span style={{ fontSize: 12, color: "#9CA3AF" }}>© 2026 Resume CoPilot · Ashborn Technologies</span>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+          {link("Pricing",        "pricing", "/pricing")}
+          {link("Contact",        "contact", "/contact")}
+          {link("Privacy Policy", "privacy", "/privacy")}
+          {link("Terms of Service","terms",  "/terms")}
+          {link("Refund Policy",  "refund",  "/refund")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Root App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [auth, setAuth]         = useState(loadAuth);
@@ -1343,8 +1718,19 @@ export default function App() {
     const path = window.location.pathname;
     if (path === "/credits/success") return "credits-success";
     if (path === "/credits/cancel")  return "credits-cancel";
+    if (path === "/pricing")         return "pricing";
+    if (path === "/contact")         return "contact";
+    if (path === "/privacy")         return "privacy";
+    if (path === "/terms")           return "terms";
+    if (path === "/refund")          return "refund";
     return "home";
   });
+
+  const navigate = (p, url) => {
+    setPage(p);
+    if (url) window.history.pushState({}, "", url);
+    else window.history.pushState({}, "", "/");
+  };
   const [authMode, setAuthMode] = useState("login");
   const [creditBalance, setCreditBalance] = useState(null);
   const [showBuyModal, setShowBuyModal]   = useState(false);
@@ -1398,15 +1784,21 @@ export default function App() {
         <BuyCreditsModal auth={auth} onClose={() => setShowBuyModal(false)} />
       )}
 
-      <div style={{ background: "#F8FAFC", minHeight: "100vh", color: "#111827", fontFamily: "'Roboto',sans-serif" }}>
+      <div style={{ background: "#F8FAFC", minHeight: "100vh", color: "#111827", fontFamily: "'Roboto',sans-serif", display: "flex", flexDirection: "column" }}>
 
         {/* Navbar */}
         <div style={{ borderBottom: "1px solid #E5E7EB", padding: "13px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#FFFFFF", zIndex: 20 }}>
-          <button onClick={() => setPage("home")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => navigate("home")} style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 18 }}>⚡</span>
-            <span style={{ fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 14, color: "#111827" }}>CoPilot</span>
+            <span style={{ fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 14, color: "#111827" }}>Resume CoPilot</span>
           </button>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button
+              onClick={() => navigate("pricing", "/pricing")}
+              style={{ background: "none", border: "none", color: "#6B7280", cursor: "pointer", fontSize: 13, fontFamily: "'Roboto',sans-serif", padding: "4px 8px" }}
+            >
+              Pricing
+            </button>
             {auth ? (
               <>
                 <CreditsBadge balance={creditBalance} onOpenModal={() => setShowBuyModal(true)} />
@@ -1415,26 +1807,26 @@ export default function App() {
               </>
             ) : (
               <>
-                <GhostBtn onClick={goLogin}     style={{ fontSize: 12, padding: "5px 14px" }}>Login</GhostBtn>
-                <PrimaryBtn onClick={goRegister} style={{ fontSize: 12, padding: "6px 16px" }}>Sign Up</PrimaryBtn>
+                <GhostBtn onClick={goLogin}      style={{ fontSize: 12, padding: "5px 14px" }}>Login</GhostBtn>
+                <PrimaryBtn onClick={goRegister}  style={{ fontSize: 12, padding: "6px 16px" }}>Sign Up</PrimaryBtn>
               </>
             )}
           </div>
         </div>
 
         {/* Pages */}
-        <div className="fade-in" key={page}>
-          {page === "home"   && <HomePage auth={auth} onGuest={() => setPage("guest")} onLogin={goLogin} onGoEditor={() => setPage("editor")} />}
-          {page === "guest"  && <GuestPage onBack={() => setPage("home")} onSignUp={goRegister} />}
-          {page === "login"  && (
+        <div className="fade-in" key={page} style={{ flex: 1 }}>
+          {page === "home"    && <HomePage auth={auth} onGuest={() => setPage("guest")} onLogin={goLogin} onGoEditor={() => setPage("editor")} onPricing={() => navigate("pricing", "/pricing")} />}
+          {page === "guest"   && <GuestPage onBack={() => navigate("home")} onSignUp={goRegister} />}
+          {page === "login"   && (
             <AuthPage
               mode={authMode}
               onAuth={handleAuth}
               onToggle={() => setAuthMode(authMode === "login" ? "register" : "login")}
-              onBack={() => setPage("home")}
+              onBack={() => navigate("home")}
             />
           )}
-          {page === "editor" && auth && (
+          {page === "editor"  && auth && (
             <EditorPage
               auth={auth}
               creditBalance={creditBalance}
@@ -1442,7 +1834,7 @@ export default function App() {
               onAnalysisComplete={fetchCredits}
             />
           )}
-          {page === "editor" && !auth && (
+          {page === "editor"  && !auth && (
             <div style={{ textAlign: "center", padding: "80px 20px" }}>
               <p style={{ color: "#6B7280", marginBottom: 16 }}>Please log in to access the editor.</p>
               <PrimaryBtn onClick={goLogin}>Login</PrimaryBtn>
@@ -1458,8 +1850,14 @@ export default function App() {
           {page === "credits-cancel" && (
             <CreditsCancelPage onGoEditor={() => setPage(auth ? "editor" : "home")} />
           )}
+          {page === "pricing" && <PricingPage onBack={() => navigate("home")} onSignUp={goRegister} />}
+          {page === "contact" && <ContactPage onBack={() => navigate("home")} />}
+          {page === "privacy" && <PrivacyPage onBack={() => navigate("home")} />}
+          {page === "terms"   && <TermsPage   onBack={() => navigate("home")} />}
+          {page === "refund"  && <RefundPage  onBack={() => navigate("home")} />}
         </div>
 
+        <Footer onNav={navigate} />
       </div>
     </>
   );

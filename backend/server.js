@@ -8,6 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 import Stripe from "stripe";
+import axios from "axios";
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType,
   TabStopType, BorderStyle, convertInchesToTwip,
@@ -747,10 +748,51 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
 // ── Credit routes ─────────────────────────────────────────────────────────────
 
 const PACKAGES = {
-  starter: { credits: 5,  amount_cents: 250,  name: "5 Credits – Starter" },
-  pro:     { credits: 15, amount_cents: 600,  name: "15 Credits – Pro" },
-  power:   { credits: 40, amount_cents: 1400, name: "40 Credits – Power" },
+  starter: { credits: 5,  usd_cents: 250,  inr_paise: 19900, name: "5 Credits – Starter" },
+  pro:     { credits: 15, usd_cents: 600,  inr_paise: 49900, name: "15 Credits – Pro" },
+  power:   { credits: 40, usd_cents: 1400, inr_paise: 99900, name: "40 Credits – Power" },
 };
+
+// In-memory cache: ip → 'usd' | 'inr', evicted after 24h
+const _ipCurrencyCache = new Map();
+
+async function getCurrencyForIP(ip) {
+  // Strip IPv6-mapped IPv4 prefix (e.g. ::ffff:1.2.3.4 → 1.2.3.4)
+  const clean = ip?.replace(/^::ffff:/, "") ?? "";
+  if (!clean || clean === "::1" || clean.startsWith("127.") || clean.startsWith("192.168.") || clean.startsWith("10.")) {
+    return "usd"; // local/dev → default USD
+  }
+  if (_ipCurrencyCache.has(clean)) return _ipCurrencyCache.get(clean);
+  try {
+    const { data } = await axios.get(`https://ipapi.co/${clean}/json/`, { timeout: 3000 });
+    const currency = data.country_code === "IN" ? "inr" : "usd";
+    _ipCurrencyCache.set(clean, currency);
+    setTimeout(() => _ipCurrencyCache.delete(clean), 24 * 60 * 60 * 1000);
+    return currency;
+  } catch {
+    return "usd";
+  }
+}
+
+function buildPackageList(currency) {
+  return Object.entries(PACKAGES).map(([key, p]) => {
+    const amount = currency === "inr" ? p.inr_paise : p.usd_cents;
+    const price  = currency === "inr"
+      ? `₹${p.inr_paise / 100}`
+      : `$${(p.usd_cents / 100).toFixed(2)}`;
+    const per    = currency === "inr"
+      ? `₹${(p.inr_paise / 100 / p.credits).toFixed(2)}/analysis`
+      : `$${(p.usd_cents / 100 / p.credits).toFixed(2)}/analysis`;
+    return { key, credits: p.credits, name: p.name, price, per_analysis: per, amount, currency };
+  });
+}
+
+// ── Credit routes ──────────────────────────────────────────────────────────────
+
+app.get("/api/currency", async (req, res) => {
+  const currency = await getCurrencyForIP(req.ip);
+  res.json({ currency, packages: buildPackageList(currency) });
+});
 
 app.get("/api/credits", requireAuth, async (req, res) => {
   try {
@@ -784,18 +826,21 @@ app.post("/api/credits/checkout", requireAuth, async (req, res) => {
   if (!pack) return res.status(400).json({ error: "Invalid package. Use: starter, pro, or power." });
 
   try {
-    const session = await stripe.checkout.sessions.create({
+    const currency = await getCurrencyForIP(req.ip);
+    const amount   = currency === "inr" ? pack.inr_paise : pack.usd_cents;
+    const appUrl   = process.env.APP_URL || "http://localhost:5173";
+    const session  = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [{
         price_data: {
-          currency: "usd",
+          currency,
           product_data: { name: pack.name },
-          unit_amount: pack.amount_cents,
+          unit_amount: amount,
         },
         quantity: 1,
       }],
-      success_url: "http://localhost:5173/credits/success?session_id={CHECKOUT_SESSION_ID}",
-      cancel_url:  "http://localhost:5173/credits/cancel",
+      success_url: `${appUrl}/credits/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${appUrl}/credits/cancel`,
       metadata: {
         user_id: String(req.user.id),
         package: pkg,
@@ -812,6 +857,25 @@ app.post("/api/credits/checkout", requireAuth, async (req, res) => {
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
+
+// ── SPA static serving (production) ───────────────────────────────────────────
+// When SERVE_STATIC=true, serve the built frontend and fall through to index.html
+// for all non-API routes so direct URL access to /privacy, /terms etc. works.
+import { existsSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+if (process.env.SERVE_STATIC === "true") {
+  const distPath = join(__dirname, "../frontend/dist");
+  app.use(express.static(distPath));
+  app.get("*", (_req, res) => {
+    const indexPath = join(distPath, "index.html");
+    if (existsSync(indexPath)) res.sendFile(indexPath);
+    else res.status(404).send("Frontend not built. Run: cd frontend && npm run build");
+  });
+}
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 

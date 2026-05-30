@@ -77,6 +77,9 @@ export const api = {
   getCreditHistory: (token) =>
     req("GET", "/credits/history", null, token),
 
+  getCurrency: () =>
+    req("GET", "/currency", null, null),
+
   checkout: (pkg, token) =>
     req("POST", "/credits/checkout", { package: pkg }, token),
 };
