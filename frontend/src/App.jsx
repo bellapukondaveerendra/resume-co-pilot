@@ -86,7 +86,8 @@ function GhostBtn({ children, onClick, disabled, style = {} }) {
       disabled={disabled}
       style={{
         background: "transparent", border: "1px solid #E5E7EB", color: "#6B7280",
-        borderRadius: 8, padding: "7px 18px", fontSize: 12, cursor: disabled ? "not-allowed" : "pointer",
+        borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 500,
+        cursor: disabled ? "not-allowed" : "pointer",
         fontFamily: "'Roboto',sans-serif", transition: "all 0.15s",
         opacity: disabled ? 0.5 : 1, ...style,
       }}
@@ -127,9 +128,9 @@ function RightTab({ label, active, onClick, dot }) {
         position: "relative", background: "none", border: "none",
         borderBottom: `2px solid ${active ? "#2563EB" : "transparent"}`,
         color: active ? "#111827" : "#9CA3AF",
-        padding: "11px 20px 10px", fontSize: 12,
+        padding: "13px 22px 12px", fontSize: 13,
         fontWeight: active ? 700 : 500, cursor: "pointer",
-        fontFamily: "'Roboto',sans-serif", letterSpacing: "0.04em",
+        fontFamily: "'Roboto',sans-serif", letterSpacing: "0.02em",
         transition: "color 0.15s, border-color 0.15s", marginBottom: -1,
       }}
     >
@@ -264,7 +265,7 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
   return (
     <div style={{ background: c.bg, border: "1px solid #E5E7EB", borderLeft: `3px solid ${c.border}`, borderRadius: 10, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.14em", color: c.badge, background: `${c.badge}1a`, padding: "2px 8px", borderRadius: 4, fontFamily: "'Space Mono',monospace", flexShrink: 0 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: c.badge, background: `${c.badge}1a`, padding: "3px 9px", borderRadius: 4, fontFamily: "'Space Mono',monospace", flexShrink: 0 }}>
           {edit.type}
         </span>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -273,24 +274,24 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
               onClick={handleApply}
               style={{
                 background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#2563EB",
-                borderRadius: 5, padding: "3px 11px", fontSize: 11, fontWeight: 700,
+                borderRadius: 5, padding: "5px 13px", fontSize: 12, fontWeight: 700,
                 cursor: "pointer", fontFamily: "'Roboto',sans-serif",
               }}
             >
               Apply →
             </button>
           )}
-          {applied     && <span style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>✓ Applied</span>}
-          {applyFailed && <span style={{ fontSize: 11, color: "#DC2626" }}>Not found — copy &amp; paste</span>}
+          {applied     && <span style={{ fontSize: 12, color: "#059669", fontWeight: 700 }}>✓ Applied</span>}
+          {applyFailed && <span style={{ fontSize: 12, color: "#DC2626" }}>Not found — copy &amp; paste</span>}
           <CopyBtn text={copyText} />
         </div>
       </div>
 
       {edit.type === "ADD" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.statement}</p>
+          <p style={{ fontSize: 13, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.statement}</p>
           {edit.target && (
-            <span style={{ fontSize: 10, color: "#059669", fontFamily: "'Space Mono',monospace", display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ fontSize: 11, color: "#059669", fontFamily: "'Space Mono',monospace", display: "flex", alignItems: "center", gap: 4 }}>
               <span style={{ opacity: 0.5 }}>→</span>
               {edit.target.name}
               <span style={{ opacity: 0.5, fontFamily: "'Roboto',sans-serif", fontStyle: "italic" }}>
@@ -302,14 +303,14 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
       )}
       {edit.type === "EDIT" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-          <p style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.5, margin: 0, textDecoration: "line-through", fontStyle: "italic" }}>{edit.from}</p>
+          <p style={{ fontSize: 12, color: "#9CA3AF", lineHeight: 1.5, margin: 0, textDecoration: "line-through", fontStyle: "italic" }}>{edit.from}</p>
           <div style={{ display: "flex", gap: 5, alignItems: "flex-start" }}>
-            <span style={{ color: "#3B82F6", fontSize: 13, marginTop: 1, flexShrink: 0 }}>→</span>
-            <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.to}</p>
+            <span style={{ color: "#3B82F6", fontSize: 14, marginTop: 1, flexShrink: 0 }}>→</span>
+            <p style={{ fontSize: 13, color: "#374151", lineHeight: 1.6, margin: 0 }}>{edit.to}</p>
           </div>
         </div>
       )}
-      {edit.type === "DELETE" && <p style={{ fontSize: 12, color: "#9CA3AF", lineHeight: 1.6, margin: 0, textDecoration: "line-through" }}>{edit.statement}</p>}
+      {edit.type === "DELETE" && <p style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.6, margin: 0, textDecoration: "line-through" }}>{edit.statement}</p>}
     </div>
   );
 }
@@ -319,20 +320,20 @@ function AnalysisInsights({ analysis, onReset, onApply, appliedEdits = new Set()
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <div>
-          <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 5 }}>{analysis.jobTitle} · {analysis.company}</p>
+          <p style={{ fontSize: 12, color: "#6B7280", marginBottom: 5 }}>{analysis.jobTitle} · {analysis.company}</p>
           <ScorePill score={analysis.matchScore} label={analysis.matchLabel} />
         </div>
-        <GhostBtn onClick={onReset} style={{ fontSize: 11, padding: "5px 12px", flexShrink: 0 }}>← New</GhostBtn>
+        <GhostBtn onClick={onReset} style={{ fontSize: 13, padding: "6px 14px", flexShrink: 0 }}>← New</GhostBtn>
       </div>
 
       <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.65, margin: 0 }}>{analysis.matchReasoning}</p>
 
       {analysis.keywordGaps?.length > 0 && (
         <div>
-          <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 6 }}>Keyword Gaps</p>
+          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 6 }}>Keyword Gaps</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {analysis.keywordGaps.map((kw, i) => (
-              <span key={i} style={{ fontSize: 10, fontFamily: "'Space Mono',monospace", color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 3, padding: "2px 6px" }}>{kw}</span>
+              <span key={i} style={{ fontSize: 11, fontFamily: "'Space Mono',monospace", color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 3, padding: "3px 7px" }}>{kw}</span>
             ))}
           </div>
         </div>
@@ -340,7 +341,7 @@ function AnalysisInsights({ analysis, onReset, onApply, appliedEdits = new Set()
 
       {analysis.edits?.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <p style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 2 }}>
+          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 2 }}>
             {analysis.edits.length} suggested {analysis.edits.length === 1 ? "change" : "changes"}
             {analysis.edits.some((e) => e.type === "ADD" && !e.target) && (
               <span style={{ color: "#9CA3AF", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
@@ -379,19 +380,19 @@ function OutreachSection({ analysis, onGoAnalysis }) {
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <p style={{ fontSize: 11, color: "#6B7280", margin: 0 }}>{analysis.jobTitle} · {analysis.company}</p>
+      <p style={{ fontSize: 13, color: "#6B7280", margin: 0 }}>{analysis.jobTitle} · {analysis.company}</p>
 
       {analysis.linkedinMessage && (
         <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid #E5E7EB", background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ padding: "11px 16px", borderBottom: "1px solid #E5E7EB", background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>💼</span>
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#2563EB" }}>LinkedIn Message</span>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#2563EB" }}>LinkedIn Message</span>
             </div>
             <CopyBtn text={analysis.linkedinMessage} />
           </div>
-          <div style={{ padding: "12px 14px" }}>
-            <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 10 }}>Under 300 chars = higher reply rate.</p>
+          <div style={{ padding: "14px 16px" }}>
+            <p style={{ fontSize: 12, color: "#6B7280", marginBottom: 10 }}>Under 300 chars = higher reply rate.</p>
             <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 12, border: "1px solid #E5E7EB" }}>
               <p style={{ fontSize: 13, color: "#111827", lineHeight: 1.75, margin: 0 }}>{analysis.linkedinMessage}</p>
             </div>
@@ -401,22 +402,22 @@ function OutreachSection({ analysis, onGoAnalysis }) {
 
       {analysis.coldEmail && (
         <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-          <div style={{ padding: "10px 14px", borderBottom: "1px solid #E5E7EB", background: "#F5F3FF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ padding: "11px 16px", borderBottom: "1px solid #E5E7EB", background: "#F5F3FF", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span>📧</span>
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#7C3AED" }}>Cold Email</span>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#7C3AED" }}>Cold Email</span>
             </div>
             <CopyBtn text={`Subject: ${analysis.coldEmail.subject}\n\n${analysis.coldEmail.body}`} />
           </div>
-          <div style={{ padding: "12px 14px" }}>
-            <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 10, display: "flex", alignItems: "center", gap: 5 }}>
-              <span style={{ background: "#EDE9FE", color: "#7C3AED", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontFamily: "'Space Mono',monospace", fontWeight: 700 }}>
+          <div style={{ padding: "14px 16px" }}>
+            <p style={{ fontSize: 12, color: "#6B7280", marginBottom: 10, display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ background: "#EDE9FE", color: "#7C3AED", borderRadius: 4, padding: "2px 8px", fontSize: 11, fontFamily: "'Space Mono',monospace", fontWeight: 700 }}>
                 [Recipient Name]
               </span>
               <span>→ replace with the actual person's name before sending.</span>
             </p>
-            <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 12, border: "1px solid #E5E7EB" }}>
-              <p style={{ fontSize: 10, color: "#7C3AED", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
+            <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, border: "1px solid #E5E7EB" }}>
+              <p style={{ fontSize: 11, color: "#7C3AED", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
                 Subject: {analysis.coldEmail.subject}
               </p>
               <div style={{ height: 1, background: "#E5E7EB", marginBottom: 10 }} />
@@ -772,7 +773,7 @@ function GuestPage({ onBack, onSignUp }) {
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
           <div>
             <button onClick={resetToInput} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", fontFamily: "'Roboto',sans-serif", marginBottom: 8, padding: 0 }}>← New analysis</button>
-            <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 6 }}>{analysis.jobTitle} · {analysis.company}</p>
+            <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 6 }}>{analysis.jobTitle} · {analysis.company}</p>
             <ScorePill score={analysis.matchScore} label={analysis.matchLabel} />
           </div>
         </div>
@@ -863,11 +864,11 @@ function AuthPage({ mode, onAuth, onToggle, onBack }) {
       <p style={{ color: "#6B7280", fontSize: 14, marginBottom: 28 }}>{mode === "login" ? "Sign in to access your resume editor." : "Sign up to build and export your resume."}</p>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div>
-          <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", display: "block", marginBottom: 6 }}>Email</label>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", display: "block", marginBottom: 6 }}>Email</label>
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && submit()} />
         </div>
         <div>
-          <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", display: "block", marginBottom: 6 }}>Password</label>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", display: "block", marginBottom: 6 }}>Password</label>
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === "register" ? "At least 6 characters" : "Your password"} style={inputStyle} onKeyDown={(e) => e.key === "Enter" && submit()} />
         </div>
         {error && <p style={{ color: "#DC2626", fontSize: 13, background: "#FEF2F2", padding: "10px 16px", borderRadius: 8, border: "1px solid #FECACA", margin: 0 }}>{error}</p>}
@@ -913,9 +914,9 @@ function Stepper({ stage }) {
         <Fragment key={step.key}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <div style={{
-              width: 20, height: 20, borderRadius: "50%", flexShrink: 0,
+              width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 9, fontWeight: 700, fontFamily: "'Space Mono',monospace",
+              fontSize: 10, fontWeight: 700, fontFamily: "'Space Mono',monospace",
               background: i < curr ? "#DBEAFE" : i === curr ? "#2563EB" : "transparent",
               border: `1.5px solid ${i <= curr ? "#2563EB" : "#D1D5DB"}`,
               color: i < curr ? "#2563EB" : i === curr ? "#FFFFFF" : "#9CA3AF",
@@ -923,7 +924,7 @@ function Stepper({ stage }) {
               {i < curr ? "✓" : i + 1}
             </div>
             <span style={{
-              fontSize: 10, fontWeight: i === curr ? 700 : 400,
+              fontSize: 11, fontWeight: i === curr ? 700 : 400,
               letterSpacing: "0.07em", textTransform: "uppercase",
               color: i === curr ? "#111827" : i < curr ? "#2563EB" : "#9CA3AF",
             }}>
@@ -1001,19 +1002,19 @@ function ExportModal({ resume, onExport, onCancel, exporting }) {
         <h3 style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>Export Resume</h3>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>File Name</label>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>File Name</label>
           <input
             value={filename}
             onChange={(e) => setFilename(e.target.value)}
-            style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 13, padding: "10px 12px", outline: "none", width: "100%", boxSizing: "border-box" }}
+            style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 8, color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "11px 14px", outline: "none", width: "100%", boxSizing: "border-box" }}
           />
-          <span style={{ fontSize: 10, color: "#6B7280" }}>
+          <span style={{ fontSize: 11, color: "#6B7280" }}>
             Saves as <strong style={{ color: "#374151" }}>{(filename || "Resume").trim()}.docx</strong>
           </span>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>Format</label>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>Format</label>
           <div style={{ display: "flex", gap: 10 }}>
             <div style={{ flex: 1, padding: "12px 0", borderRadius: 8, fontSize: 12, fontWeight: 700, textAlign: "center", background: "#EFF6FF", border: "1px solid #93C5FD", color: "#2563EB" }}>
               DOCX
@@ -1092,18 +1093,20 @@ function HistoryPanel({ auth, onLoad }) {
         <div
           key={item.id}
           onClick={() => onLoad(item.result)}
-          style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, padding: "10px 12px", cursor: "pointer", transition: "border-color 0.15s" }}
+          style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, padding: "12px 14px", cursor: "pointer", transition: "border-color 0.15s" }}
           onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#93C5FD")}
           onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#E5E7EB")}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
             <div style={{ minWidth: 0 }}>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "#111827", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <p style={{ fontSize: 13, fontWeight: 600, color: "#111827", marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {item.job_title || "Unknown Role"}
               </p>
-              <p style={{ fontSize: 11, color: "#6B7280", marginBottom: 3 }}>{item.company || "—"}</p>
-              <p style={{ fontSize: 10, color: "#9CA3AF" }}>
+              <p style={{ fontSize: 12, color: "#6B7280", marginBottom: 3 }}>{item.company || "—"}</p>
+              <p style={{ fontSize: 11, color: "#9CA3AF" }}>
                 {new Date(item.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                {" · "}
+                {new Date(item.created_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
               </p>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
@@ -1301,7 +1304,7 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
 
   const jiStyle = {
     width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10,
-    color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 13, padding: "11px 14px",
+    color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "12px 16px",
     outline: "none", boxSizing: "border-box",
   };
 
@@ -1329,14 +1332,14 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
             />
             <Stepper stage="edit" />
             <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-              {saveMsg && <span style={{ fontSize: 11, color: saveMsg === "Saved!" ? "#059669" : "#DC2626" }}>{saveMsg}</span>}
-              <GhostBtn onClick={() => replaceFileRef.current.click()} disabled={importing} style={{ fontSize: 11, padding: "5px 12px" }}>
+              {saveMsg && <span style={{ fontSize: 13, color: saveMsg === "Saved!" ? "#059669" : "#DC2626" }}>{saveMsg}</span>}
+              <GhostBtn onClick={() => replaceFileRef.current.click()} disabled={importing} style={{ fontSize: 13, padding: "7px 14px" }}>
                 Replace Resume
               </GhostBtn>
-              <GhostBtn onClick={handleSave} disabled={saving} style={{ fontSize: 11, padding: "5px 12px" }}>
+              <GhostBtn onClick={handleSave} disabled={saving} style={{ fontSize: 13, padding: "7px 14px" }}>
                 {saving ? "Saving…" : "Save"}
               </GhostBtn>
-              <PrimaryBtn onClick={handleGoPreview} disabled={saving} style={{ padding: "7px 16px", fontSize: 12 }}>
+              <PrimaryBtn onClick={handleGoPreview} disabled={saving} style={{ padding: "8px 18px", fontSize: 13 }}>
                 {saving ? "Saving…" : "Preview →"}
               </PrimaryBtn>
             </div>
@@ -1400,7 +1403,7 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
                         <p style={{ color: "#DC2626", fontSize: 12, margin: 0, background: "#FEF2F2", padding: "8px 12px", borderRadius: 6, border: "1px solid #FECACA" }}>{analysisError}</p>
                       )}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job</span>
                         <TabBar
                           options={[{ value: "paste", label: "Paste JD" }, { value: "url", label: "Job URL (Coming Soon)" }]}
                           value={inputMode}
@@ -1419,11 +1422,11 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
                           <p style={{ fontSize: 11, color: "#6B7280", marginTop: 8, lineHeight: 1.5 }}>We're working on reliable job extraction. For now, please paste the job description manually.</p>
                         </div>
                       )}
-                      <PrimaryBtn onClick={handleAnalyze} disabled={!jobInput.trim() || inputMode === "url"} style={{ width: "100%", padding: "11px" }}>
+                      <PrimaryBtn onClick={handleAnalyze} disabled={!jobInput.trim() || inputMode === "url"} style={{ width: "100%", padding: "12px", fontSize: 14 }}>
                         Analyze →
                       </PrimaryBtn>
                       {creditBalance !== null && (
-                        <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
+                        <p style={{ fontSize: 12, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
                           ⚡ {creditBalance} credit{creditBalance === 1 ? "" : "s"} remaining
                         </p>
                       )}
@@ -1451,8 +1454,8 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
                   <Spinner label="Importing resume and preparing your editor…" />
                 </div>
               )}
-              <div style={{ padding: "8px 14px", borderBottom: "1px solid #E5E7EB", background: "#FFFFFF", flexShrink: 0 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#9CA3AF" }}>Editor</span>
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid #E5E7EB", background: "#FFFFFF", flexShrink: 0 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Editor</span>
               </div>
               <div ref={editorScrollRef} style={{ flex: 1, overflowY: "auto", padding: 14 }}>
                 <ResumeEditor resume={resume} onChange={handleChange} isImported={isImported} />
@@ -1479,15 +1482,15 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
         )}
         <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 50px)" }}>
           <div style={NAV.style}>
-            <GhostBtn onClick={() => setStage("edit")} style={{ fontSize: 11, padding: "5px 14px", justifySelf: "start" }}>← Edit</GhostBtn>
+            <GhostBtn onClick={() => setStage("edit")} style={{ fontSize: 13, padding: "7px 16px", justifySelf: "start" }}>← Edit</GhostBtn>
             <Stepper stage="preview" />
             <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
-              <PrimaryBtn onClick={() => setShowExportModal(true)} style={{ fontSize: 11, padding: "7px 14px" }}>Export DOCX</PrimaryBtn>
+              <PrimaryBtn onClick={() => setShowExportModal(true)} style={{ fontSize: 13, padding: "8px 16px" }}>Export DOCX</PrimaryBtn>
               <div title={!hasAnalysis ? "Run analysis in Stage 1 to unlock outreach" : ""} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                <GhostBtn onClick={() => setStage("outreach")} disabled={!hasAnalysis} style={{ fontSize: 11, padding: "5px 12px" }}>
+                <GhostBtn onClick={() => setStage("outreach")} disabled={!hasAnalysis} style={{ fontSize: 13, padding: "7px 14px" }}>
                   Outreach →
                 </GhostBtn>
-                {!hasAnalysis && <span style={{ fontSize: 9, color: "#9CA3AF", letterSpacing: "0.04em" }}>Run analysis first</span>}
+                {!hasAnalysis && <span style={{ fontSize: 10, color: "#9CA3AF", letterSpacing: "0.04em" }}>Run analysis first</span>}
               </div>
             </div>
           </div>
@@ -1507,12 +1510,12 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
     return (
       <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 50px)" }}>
         <div style={NAV.style}>
-          <GhostBtn onClick={() => setStage("preview")} style={{ fontSize: 11, padding: "5px 14px", justifySelf: "start" }}>← Preview</GhostBtn>
+          <GhostBtn onClick={() => setStage("preview")} style={{ fontSize: 13, padding: "7px 16px", justifySelf: "start" }}>← Preview</GhostBtn>
           <Stepper stage="outreach" />
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <PrimaryBtn
               onClick={() => { setJobInput(""); setAnalysis(null); setAnalysisStep("idle"); setStage("edit"); }}
-              style={{ padding: "7px 16px", fontSize: 12 }}
+              style={{ padding: "8px 18px", fontSize: 13 }}
             >
               Analyze Another Job →
             </PrimaryBtn>
@@ -1959,7 +1962,7 @@ export default function App() {
         @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
         @keyframes spin   { to { transform: rotate(360deg); } }
         @keyframes pulse  { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-        .tab-btn { background:transparent; border:1px solid #E5E7EB; color:#6B7280; cursor:pointer; padding:6px 16px; font-size:11px; font-family:'Roboto',sans-serif; font-weight:500; letter-spacing:0.04em; text-transform:uppercase; transition:all 0.15s; }
+        .tab-btn { background:transparent; border:1px solid #E5E7EB; color:#6B7280; cursor:pointer; padding:7px 18px; font-size:12px; font-family:'Roboto',sans-serif; font-weight:500; letter-spacing:0.03em; text-transform:uppercase; transition:all 0.15s; }
         .tab-btn.active { background:#EFF6FF; border-color:#93C5FD; color:#2563EB; }
         ${PREVIEW_CSS}
       `}</style>

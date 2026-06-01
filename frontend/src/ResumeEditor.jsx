@@ -10,8 +10,8 @@ const baseInput = (warn) => ({
   color: "#111827",
   border: `1px solid ${borderColor(warn)}`,
   borderRadius: 8,
-  padding: "10px 12px",
-  fontSize: 13,
+  padding: "11px 14px",
+  fontSize: 14,
   outline: "none",
   fontFamily: "'Roboto', sans-serif",
   boxSizing: "border-box",
@@ -23,7 +23,7 @@ function Field({ label, value, onChange, placeholder, multiline, isImported }) {
   const warn = isImported && !value;
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: warn ? "#c8a000" : "#6B7280" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: warn ? "#c8a000" : "#6B7280" }}>
         {label}
         {warn && <span title="Not extracted — fill this in">⚠</span>}
       </span>
@@ -59,7 +59,7 @@ function SkillItemsField({ items, onChange, isImported }) {
 
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: warn ? "#c8a000" : "#6B7280" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: warn ? "#c8a000" : "#6B7280" }}>
         Items
         {warn && <span title="No skills extracted — add them here">⚠</span>}
       </span>
@@ -90,7 +90,7 @@ function IconBtn({ children, onClick, tone = "ghost", title }) {
       title={title}
       style={{
         background: c.bg, border: `1px solid ${c.border}`, color: c.color,
-        borderRadius: 8, padding: "6px 11px", fontSize: 11, fontWeight: 600,
+        borderRadius: 8, padding: "7px 13px", fontSize: 12, fontWeight: 600,
         cursor: "pointer", whiteSpace: "nowrap", fontFamily: "'Roboto', sans-serif",
       }}
     >
@@ -103,7 +103,7 @@ function IconBtn({ children, onClick, tone = "ghost", title }) {
 
 function SectionCard({ title, subtitle, children, onAdd, addLabel }) {
   return (
-    <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 14, padding: 16, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
+    <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 14, padding: 20, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
         <div>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{title}</h3>
@@ -126,7 +126,7 @@ function BulletList({ points, onChange, placeholder = "Bullet point…", isImpor
 
   const inputStyle = {
     flex: 1, background: "#FFFFFF", color: "#111827", border: "1px solid #D1D5DB",
-    borderRadius: 8, padding: "8px 10px", fontSize: 12, outline: "none",
+    borderRadius: 8, padding: "9px 12px", fontSize: 13, outline: "none",
     fontFamily: "'Roboto', sans-serif", lineHeight: 1.5, resize: "vertical",
     minHeight: 36, boxSizing: "border-box",
   };
@@ -136,13 +136,13 @@ function BulletList({ points, onChange, placeholder = "Bullet point…", isImpor
       display: "flex", flexDirection: "column", gap: 7,
       ...(warn ? { border: "1px solid #FDE68A", borderRadius: 8, padding: 8 } : {}),
     }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: warn ? "#c8a000" : "#6B7280" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: warn ? "#c8a000" : "#6B7280" }}>
         Bullet Points
         {warn && <span title="No bullets extracted — add them manually">⚠</span>}
       </span>
       {points.map((pt, i) => (
         <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-          <span style={{ color: "#CBD5E1", fontSize: 14, paddingTop: 9, flexShrink: 0 }}>•</span>
+          <span style={{ color: "#CBD5E1", fontSize: 14, paddingTop: 10, flexShrink: 0 }}>•</span>
           <textarea value={pt} onChange={(e) => edit(i, e.target.value)} placeholder={placeholder} style={inputStyle} rows={2} />
           <IconBtn tone="danger" onClick={() => remove(i)} title="Delete">×</IconBtn>
         </div>

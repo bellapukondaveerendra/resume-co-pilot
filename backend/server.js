@@ -264,6 +264,29 @@ async function buildDocx(resume) {
   return Packer.toBuffer(doc);
 }
 
+// ── JSON repair helper ────────────────────────────────────────────────────────
+// The AI can return JSON with invalid escape sequences when resume text contains
+// Windows paths (C:\Users\...), LaTeX, or other backslash sequences. This tries
+// progressively more aggressive repairs before giving up.
+function parseAiJson(raw) {
+  // Pass 1 — direct parse
+  try { return JSON.parse(raw); } catch {}
+
+  // Pass 2 — fix invalid escape sequences: \x where x is not a valid JSON
+  // escape character (", \, /, b, f, n, r, t, uXXXX). Replaces with \\x.
+  const fixedEscapes = raw.replace(/\\([^"\\/bfnrtu\n\r])/g, "\\\\$1");
+  try { return JSON.parse(fixedEscapes); } catch {}
+
+  // Pass 3 — also close any unclosed brackets/braces
+  const stack = [];
+  for (const ch of fixedEscapes) {
+    if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  const closed = fixedEscapes + stack.reverse().join("");
+  return JSON.parse(closed); // throws if still broken, caught by caller
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // Auth — register
@@ -284,6 +307,13 @@ app.post("/api/auth/register", authLimiter, async (req, res) => {
     const id = result.rows[0].id;
     await dbClient.query("INSERT INTO credits (user_id, balance) VALUES ($1, 5)", [id]);
     await dbClient.query("COMMIT");
+
+    // Prevent double-dipping: cap this IP's guest usage so the new account holder
+    // can't bypass credit limits by opening incognito and using guest mode.
+    query(
+      "INSERT INTO guest_usage (ip, count) VALUES ($1, 5) ON CONFLICT (ip) DO UPDATE SET count = GREATEST(guest_usage.count, 5)",
+      [req.ip]
+    ).catch(() => {}); // non-critical
 
     const token = jwt.sign({ id, email: email.toLowerCase().trim() }, JWT_SECRET, { expiresIn: "7d" });
     res.json({ token, user: { id, email: email.toLowerCase().trim() } });
@@ -554,18 +584,7 @@ QUALITY GUIDELINES
     );
 
     let raw = message.content.map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      const stack = [];
-      for (const ch of raw) {
-        if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
-        else if (ch === "}" || ch === "]") stack.pop();
-      }
-      raw += stack.reverse().join("");
-      parsed = JSON.parse(raw);
-    }
+    const parsed = parseAiJson(raw);
 
     // Log credit transaction and save analysis to history
     if (req.user) {
@@ -590,7 +609,10 @@ QUALITY GUIDELINES
       ).catch((e) => console.error("Credit refund error:", e.message));
     }
     console.error("Analyze error:", err.message);
-    res.status(500).json({ error: "Analysis failed: " + err.message });
+    const userMsg = err.message?.includes("timed out")
+      ? "Analysis timed out — please try again."
+      : "Analysis failed. Please try again in a moment.";
+    res.status(500).json({ error: userMsg });
   }
 });
 
