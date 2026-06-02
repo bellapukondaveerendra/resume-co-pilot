@@ -11,7 +11,6 @@
     "@neondatabase/serverless": "^1.1.0",
     "axios": "^1.15.1",
     "bcryptjs": "^2.4.3",
-    "cheerio": "^1.2.0",
     "cors": "^2.8.5",
     "docx": "^8.5.0",
     "dotenv": "^16.4.5",
@@ -24,6 +23,7 @@
     "node-cron": "^4.2.1",
     "pdf-parse": "^1.1.1",
     "pg": "^8.20.0",
+    "resend": "^4.0.0",
     "stripe": "^22.0.2",
     "ws": "^8.20.0"
   },

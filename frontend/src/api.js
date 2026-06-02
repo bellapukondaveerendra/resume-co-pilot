@@ -13,6 +13,7 @@ async function req(method, path, body, token) {
     const err = new Error(data.error || "Request failed");
     err.code   = data.code;
     err.status = res.status;
+    err.limit  = data.limit;
     throw err;
   }
   return data;
@@ -24,6 +25,12 @@ export const api = {
 
   login: (email, password) =>
     req("POST", "/auth/login", { email, password }),
+
+  forgotPassword: (email) =>
+    req("POST", "/auth/forgot-password", { email }),
+
+  resetPassword: (token, password) =>
+    req("POST", "/auth/reset-password", { token, password }),
 
   extract: async (file) => {
     const form = new FormData();
@@ -88,4 +95,7 @@ export const api = {
 
   deleteAnalysis: (id, token) =>
     req("DELETE", `/analyses/${id}`, null, token),
+
+  deleteAccount: (token) =>
+    req("DELETE", "/account", null, token),
 };

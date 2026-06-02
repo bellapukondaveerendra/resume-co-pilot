@@ -13,12 +13,18 @@ export async function initSchema() {
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
-        id         SERIAL PRIMARY KEY,
-        email      TEXT UNIQUE NOT NULL,
-        hash       TEXT NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        id            SERIAL PRIMARY KEY,
+        email         TEXT UNIQUE NOT NULL,
+        hash          TEXT NOT NULL,
+        token_version INTEGER NOT NULL DEFAULT 0,
+        created_at    TIMESTAMPTZ DEFAULT NOW()
       )
     `);
+
+    // Migration: add token_version to pre-existing users tables
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0`
+    );
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS resumes (
@@ -64,6 +70,32 @@ export async function initSchema() {
         id              SERIAL PRIMARY KEY,
         stripe_event_id TEXT UNIQUE NOT NULL,
         processed_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS password_resets (
+        id         SERIAL PRIMARY KEY,
+        user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used       BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Audit log for credit refunds that couldn't be applied (e.g. DB error
+    // during refund). Operators can replay these manually. No FK to users so
+    // records survive account deletion.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS failed_refunds (
+        id         SERIAL PRIMARY KEY,
+        user_id    INTEGER NOT NULL,
+        amount     INTEGER NOT NULL,
+        reason     TEXT NOT NULL,
+        error_msg  TEXT,
+        resolved   BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 

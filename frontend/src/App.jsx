@@ -147,13 +147,16 @@ function RightTab({ label, active, onClick, dot }) {
 
 function CopyBtn({ text }) {
   const [copied, setCopied] = useState(false);
+  const timerRef = useRef();
+  useEffect(() => () => clearTimeout(timerRef.current), []);
   return (
     <button
       onClick={(e) => {
         e.stopPropagation();
         navigator.clipboard.writeText(text);
         setCopied(true);
-        setTimeout(() => setCopied(false), 1800);
+        clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => setCopied(false), 1800);
       }}
       style={{
         background: copied ? "#ECFDF5" : "transparent",
@@ -176,7 +179,7 @@ function applyEditToResume(resume, edit) {
     if (!na || !nb) return false;
     return na.includes(nb.slice(0, 70)) || nb.includes(na.slice(0, 70));
   };
-  const clone = JSON.parse(JSON.stringify(resume));
+  const clone = structuredClone(resume);
 
   if (edit.type === "ADD") {
     if (!edit.target) return null; // no target = copy-only (backward compatible)
@@ -241,6 +244,8 @@ function ScorePill({ score, label }) {
 
 function EditCard({ edit, onApply, applied, editorAvailable = true }) {
   const [applyFailed, setApplyFailed] = useState(false);
+  const failTimerRef = useRef();
+  useEffect(() => () => clearTimeout(failTimerRef.current), []);
   const C = {
     ADD:    { bg: "#ECFDF5", border: "#10B981", badge: "#059669" },
     EDIT:   { bg: "#EFF6FF", border: "#3B82F6", badge: "#2563EB" },
@@ -258,7 +263,8 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
     const ok = onApply();
     if (!ok) {
       setApplyFailed(true);
-      setTimeout(() => setApplyFailed(false), 2500);
+      clearTimeout(failTimerRef.current);
+      failTimerRef.current = setTimeout(() => setApplyFailed(false), 2500);
     }
   };
 
@@ -315,7 +321,14 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
   );
 }
 
-function AnalysisInsights({ analysis, onReset, onApply, appliedEdits = new Set(), editorAvailable = true }) {
+function AnalysisInsights({ analysis, onReset, onApply, onApplyAll, onReAnalyze, appliedEdits = new Set(), editorAvailable = true }) {
+  const unappliedApplicableCount = (analysis.edits || []).reduce((acc, e, i) => {
+    if (appliedEdits.has(i)) return acc;
+    const ok = e.type === "EDIT" || e.type === "DELETE" || (e.type === "ADD" && e.target);
+    return ok ? acc + 1 : acc;
+  }, 0);
+  const hasApplied = appliedEdits.size > 0;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
@@ -325,6 +338,17 @@ function AnalysisInsights({ analysis, onReset, onApply, appliedEdits = new Set()
         </div>
         <GhostBtn onClick={onReset} style={{ fontSize: 13, padding: "6px 14px", flexShrink: 0 }}>← New</GhostBtn>
       </div>
+
+      {editorAvailable && hasApplied && onReAnalyze && (
+        <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "11px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <p style={{ fontSize: 12, color: "#1E40AF", margin: 0, lineHeight: 1.5 }}>
+            You've applied {appliedEdits.size} {appliedEdits.size === 1 ? "edit" : "edits"}. See your new match score?
+          </p>
+          <PrimaryBtn onClick={onReAnalyze} style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}>
+            Re-analyze →
+          </PrimaryBtn>
+        </div>
+      )}
 
       <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.65, margin: 0 }}>{analysis.matchReasoning}</p>
 
@@ -341,14 +365,28 @@ function AnalysisInsights({ analysis, onReset, onApply, appliedEdits = new Set()
 
       {analysis.edits?.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 2 }}>
-            {analysis.edits.length} suggested {analysis.edits.length === 1 ? "change" : "changes"}
-            {analysis.edits.some((e) => e.type === "ADD" && !e.target) && (
-              <span style={{ color: "#9CA3AF", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-                {" "}— some ADD cards are copy-only
-              </span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 2, flexWrap: "wrap" }}>
+            <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", margin: 0 }}>
+              {analysis.edits.length} suggested {analysis.edits.length === 1 ? "change" : "changes"}
+              {analysis.edits.some((e) => e.type === "ADD" && !e.target) && (
+                <span style={{ color: "#9CA3AF", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
+                  {" "}— some ADD cards are copy-only
+                </span>
+              )}
+            </p>
+            {editorAvailable && onApplyAll && unappliedApplicableCount > 0 && (
+              <button
+                onClick={onApplyAll}
+                style={{
+                  background: "#EFF6FF", border: "1px solid #BFDBFE", color: "#2563EB",
+                  borderRadius: 5, padding: "5px 12px", fontSize: 11, fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Roboto',sans-serif", whiteSpace: "nowrap",
+                }}
+              >
+                Apply all ({unappliedApplicableCount}) →
+              </button>
             )}
-          </p>
+          </div>
           {analysis.edits.map((edit, i) => (
             <EditCard
               key={i}
@@ -426,6 +464,37 @@ function OutreachSection({ analysis, onGoAnalysis }) {
           </div>
         </div>
       )}
+
+      {analysis.coverLetter && (
+        <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
+          <div style={{ padding: "11px 16px", borderBottom: "1px solid #E5E7EB", background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span>📝</span>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#B45309" }}>Cover Letter</span>
+            </div>
+            <CopyBtn text={`Subject: ${analysis.coverLetter.subject}\n\n${analysis.coverLetter.body}`} />
+          </div>
+          <div style={{ padding: "14px 16px" }}>
+            <p style={{ fontSize: 12, color: "#6B7280", marginBottom: 10, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+              <span style={{ background: "#FDE68A", color: "#B45309", borderRadius: 4, padding: "2px 8px", fontSize: 11, fontFamily: "'Space Mono',monospace", fontWeight: 700 }}>
+                [Hiring Manager]
+              </span>
+              <span>and</span>
+              <span style={{ background: "#FDE68A", color: "#B45309", borderRadius: 4, padding: "2px 8px", fontSize: 11, fontFamily: "'Space Mono',monospace", fontWeight: 700 }}>
+                [Your Name]
+              </span>
+              <span>→ replace before sending.</span>
+            </p>
+            <div style={{ background: "#F8FAFC", borderRadius: 8, padding: 14, border: "1px solid #E5E7EB" }}>
+              <p style={{ fontSize: 11, color: "#B45309", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
+                Subject: {analysis.coverLetter.subject}
+              </p>
+              <div style={{ height: 1, background: "#E5E7EB", marginBottom: 10 }} />
+              <p style={{ fontSize: 13, color: "#111827", lineHeight: 1.8, margin: 0, whiteSpace: "pre-line" }}>{analysis.coverLetter.body}</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -446,6 +515,7 @@ function Spinner({ label }) {
 function BuyCreditsModal({ auth, onClose }) {
   const [loadingPkg, setLoadingPkg]   = useState(null);
   const [currencyData, setCurrencyData] = useState(null);
+  const [checkoutError, setCheckoutError] = useState("");
 
   useEffect(() => {
     api.getCurrency()
@@ -468,12 +538,14 @@ function BuyCreditsModal({ auth, onClose }) {
   }));
 
   const handleBuy = async (pkg) => {
+    setCheckoutError("");
     setLoadingPkg(pkg);
     try {
       const data = await api.checkout(pkg, auth.token);
       window.location.href = data.url;
     } catch (err) {
       console.error("Checkout error:", err.message);
+      setCheckoutError(err.message || "Couldn't start checkout. Please try again.");
       setLoadingPkg(null);
     }
   };
@@ -553,6 +625,12 @@ function BuyCreditsModal({ auth, onClose }) {
             );
           })}
         </div>
+
+        {checkoutError && (
+          <p style={{ fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", margin: 0, textAlign: "center" }}>
+            {checkoutError}
+          </p>
+        )}
 
         <p style={{ fontSize: 11, color: "#9CA3AF", textAlign: "center", margin: 0 }}>
           Secure payment via Stripe. Credits never expire.
@@ -635,7 +713,6 @@ function CreditsCancelPage({ onGoEditor }) {
 // ── JobInputForm ──────────────────────────────────────────────────────────────
 function JobInputForm({ onAnalyze, loading }) {
   const [jobInput, setJobInput] = useState("");
-  const [inputMode, setInputMode] = useState("paste");
   const inputStyle = {
     width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10,
     color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "12px 16px",
@@ -643,29 +720,12 @@ function JobInputForm({ onAnalyze, loading }) {
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job</span>
-        <TabBar
-          options={[{ value: "paste", label: "Paste JD" }, { value: "url", label: "Job URL (Coming Soon)" }]}
-          value={inputMode}
-          onChange={(val) => { if (val !== "url") setInputMode(val); }}
-          disabledValues={["url"]}
-        />
-      </div>
-      {inputMode === "paste" ? (
-        <>
-          <textarea style={{ ...inputStyle, minHeight: 110, resize: "vertical" }} placeholder="Paste the full job description here…" value={jobInput} onChange={(e) => setJobInput(e.target.value)} />
-          <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>For best results, paste the full job description.</p>
-        </>
-      ) : (
-        <div style={{ opacity: 0.5, pointerEvents: "none" }}>
-          <input disabled style={{ ...inputStyle, cursor: "not-allowed" }} placeholder="https://jobs.lever.co/company/role-id" value="" readOnly />
-          <p style={{ fontSize: 11, color: "#6B7280", marginTop: 8, lineHeight: 1.5 }}>We're working on reliable job extraction. For now, please paste the job description manually.</p>
-        </div>
-      )}
+      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job Description</span>
+      <textarea style={{ ...inputStyle, minHeight: 110, resize: "vertical" }} placeholder="Paste the full job description here…" value={jobInput} onChange={(e) => setJobInput(e.target.value)} />
+      <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>For best results, paste the full job description.</p>
       <PrimaryBtn
-        onClick={() => { if (inputMode !== "url") onAnalyze(jobInput.trim(), "paste"); }}
-        disabled={loading || !jobInput.trim() || inputMode === "url"}
+        onClick={() => onAnalyze(jobInput.trim(), "paste")}
+        disabled={loading || !jobInput.trim()}
         style={{ width: "100%", padding: "12px" }}
       >
         {loading ? "Analyzing…" : "Analyze →"}
@@ -725,7 +785,17 @@ function GuestPage({ onBack, onSignUp }) {
   const [guestTab, setGuestTab]             = useState("analysis");
   const [error, setError]                   = useState("");
   const [guestLimitReached, setGuestLimitReached] = useState(false);
+  const [guestLimit, setGuestLimit]               = useState(null);
   const fileRef = useRef();
+
+  // Warn guest before browser-level navigation (close, refresh, back) when an
+  // unsaved analysis result is on screen — no account = no way to recover it.
+  useEffect(() => {
+    if (!analysis) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [analysis]);
 
   const inputStyle = { width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "12px 16px", outline: "none", boxSizing: "border-box" };
 
@@ -756,6 +826,7 @@ function GuestPage({ onBack, onSignUp }) {
     } catch (err) {
       if (err.code === "GUEST_LIMIT" || err.message?.includes("Guest limit")) {
         setGuestLimitReached(true);
+        if (err.limit) setGuestLimit(err.limit);
       } else {
         setError("Analysis failed: " + err.message);
       }
@@ -804,10 +875,10 @@ function GuestPage({ onBack, onSignUp }) {
       {guestLimitReached && (
         <div style={{ background: "#FEF3C7", border: "1px solid #FDE68A", borderRadius: 10, padding: "14px 16px", marginBottom: 16, display: "flex", flexDirection: "column", gap: 10 }}>
           <p style={{ fontSize: 13, color: "#92400E", fontWeight: 600, margin: 0 }}>
-            You've used your 5 free analyses.
+            You've used your {guestLimit ?? "free"} {guestLimit ? "free analyses" : "guest analyses"}.
           </p>
           <p style={{ fontSize: 12, color: "#78350F", margin: 0, lineHeight: 1.5 }}>
-            Create a free account to get 5 more credits.
+            Create a free account to keep going.
           </p>
           <PrimaryBtn onClick={onSignUp} style={{ alignSelf: "flex-start", padding: "8px 18px", fontSize: 13 }}>
             Sign Up Free →
@@ -842,7 +913,7 @@ function GuestPage({ onBack, onSignUp }) {
 }
 
 // ── Auth page ─────────────────────────────────────────────────────────────────
-function AuthPage({ mode, onAuth, onToggle, onBack }) {
+function AuthPage({ mode, onAuth, onToggle, onBack, onForgot }) {
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading]   = useState(false);
@@ -873,12 +944,204 @@ function AuthPage({ mode, onAuth, onToggle, onBack }) {
         </div>
         {error && <p style={{ color: "#DC2626", fontSize: 13, background: "#FEF2F2", padding: "10px 16px", borderRadius: 8, border: "1px solid #FECACA", margin: 0 }}>{error}</p>}
         <PrimaryBtn onClick={submit} disabled={loading} style={{ width: "100%" }}>{loading ? "Please wait…" : mode === "login" ? "Sign In" : "Create Account"}</PrimaryBtn>
+        {mode === "login" && (
+          <p style={{ fontSize: 13, color: "#6B7280", textAlign: "center", marginTop: -4 }}>
+            <button onClick={onForgot} style={{ background: "none", border: "none", color: "#2563EB", cursor: "pointer", fontSize: 13, fontFamily: "'Roboto',sans-serif", padding: 0 }}>
+              Forgot password?
+            </button>
+          </p>
+        )}
         <p style={{ fontSize: 13, color: "#6B7280", textAlign: "center" }}>
           {mode === "login" ? "No account? " : "Already have one? "}
           <button onClick={onToggle} style={{ background: "none", border: "none", color: "#2563EB", cursor: "pointer", fontSize: 13, fontFamily: "'Roboto',sans-serif", padding: 0 }}>
             {mode === "login" ? "Sign up" : "Sign in"}
           </button>
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Forgot Password page ──────────────────────────────────────────────────────
+function ForgotPasswordPage({ onBack, onGoLogin }) {
+  const [email, setEmail]     = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
+  const [sent, setSent]       = useState(false);
+  const inputStyle = { width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "12px 16px", outline: "none", boxSizing: "border-box" };
+
+  const submit = async () => {
+    setError("");
+    if (!email) { setError("Email is required."); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { setError("Please enter a valid email address."); return; }
+    setLoading(true);
+    try { await api.forgotPassword(email); setSent(true); }
+    catch (err) { setError(err.message || "Could not send reset email."); }
+    finally { setLoading(false); }
+  };
+
+  if (sent) {
+    return (
+      <div style={{ maxWidth: 400, margin: "0 auto", padding: "60px 20px" }}>
+        <h1 style={{ fontSize: 26, fontWeight: 700, marginBottom: 8, color: "#111827" }}>Check your inbox</h1>
+        <p style={{ color: "#6B7280", fontSize: 14, lineHeight: 1.7, marginBottom: 22 }}>
+          If an account exists for <strong>{email}</strong>, we've sent a password reset link. The link expires in 15 minutes.
+        </p>
+        <GhostBtn onClick={onGoLogin} style={{ fontSize: 13 }}>← Back to login</GhostBtn>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 400, margin: "0 auto", padding: "60px 20px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", marginBottom: 24, fontFamily: "'Roboto',sans-serif" }}>← Back</button>
+      <h1 style={{ fontSize: 26, fontWeight: 700, marginBottom: 6, color: "#111827" }}>Forgot password?</h1>
+      <p style={{ color: "#6B7280", fontSize: 14, marginBottom: 28 }}>Enter your email and we'll send you a reset link.</p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", display: "block", marginBottom: 6 }}>Email</label>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        </div>
+        {error && <p style={{ color: "#DC2626", fontSize: 13, background: "#FEF2F2", padding: "10px 16px", borderRadius: 8, border: "1px solid #FECACA", margin: 0 }}>{error}</p>}
+        <PrimaryBtn onClick={submit} disabled={loading} style={{ width: "100%" }}>{loading ? "Sending…" : "Send reset link"}</PrimaryBtn>
+        <p style={{ fontSize: 13, color: "#6B7280", textAlign: "center" }}>
+          Remembered it?{" "}
+          <button onClick={onGoLogin} style={{ background: "none", border: "none", color: "#2563EB", cursor: "pointer", fontSize: 13, fontFamily: "'Roboto',sans-serif", padding: 0 }}>Sign in</button>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Reset Password page ──────────────────────────────────────────────────────
+function ResetPasswordPage({ onGoLogin }) {
+  const token = new URLSearchParams(window.location.search).get("token") || "";
+  const [password, setPassword]   = useState("");
+  const [confirm, setConfirm]     = useState("");
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState("");
+  const [success, setSuccess]     = useState(false);
+  const inputStyle = { width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10, color: "#111827", fontFamily: "'Roboto',sans-serif", fontSize: 14, padding: "12px 16px", outline: "none", boxSizing: "border-box" };
+
+  const submit = async () => {
+    setError("");
+    if (!token) { setError("Missing reset token. Please use the link from your email."); return; }
+    if (password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    if (password !== confirm) { setError("Passwords don't match."); return; }
+    setLoading(true);
+    try { await api.resetPassword(token, password); setSuccess(true); }
+    catch (err) { setError(err.message || "Reset failed."); }
+    finally { setLoading(false); }
+  };
+
+  if (success) {
+    return (
+      <div style={{ maxWidth: 400, margin: "0 auto", padding: "60px 20px", textAlign: "center" }}>
+        <div style={{ width: 56, height: 56, borderRadius: "50%", background: "#ECFDF5", border: "2px solid #6EE7B7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, margin: "0 auto 18px" }}>✓</div>
+        <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8, color: "#111827" }}>Password updated</h1>
+        <p style={{ color: "#6B7280", fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>You can now sign in with your new password.</p>
+        <PrimaryBtn onClick={onGoLogin}>Sign in →</PrimaryBtn>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 400, margin: "0 auto", padding: "60px 20px" }}>
+      <h1 style={{ fontSize: 26, fontWeight: 700, marginBottom: 6, color: "#111827" }}>Set a new password</h1>
+      <p style={{ color: "#6B7280", fontSize: 14, marginBottom: 28 }}>Choose a password you haven't used before.</p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", display: "block", marginBottom: 6 }}>New password</label>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        </div>
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280", display: "block", marginBottom: 6 }}>Confirm password</label>
+          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Repeat your password" style={inputStyle} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        </div>
+        {error && <p style={{ color: "#DC2626", fontSize: 13, background: "#FEF2F2", padding: "10px 16px", borderRadius: 8, border: "1px solid #FECACA", margin: 0 }}>{error}</p>}
+        <PrimaryBtn onClick={submit} disabled={loading} style={{ width: "100%" }}>{loading ? "Updating…" : "Update password"}</PrimaryBtn>
+      </div>
+    </div>
+  );
+}
+
+// ── Account page (delete account) ─────────────────────────────────────────────
+function AccountPage({ auth, onBack, onDeleted }) {
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting]       = useState(false);
+  const [error, setError]             = useState("");
+
+  const email = auth.user?.email || "";
+  const canDelete = confirmText.trim().toLowerCase() === email.toLowerCase();
+
+  const handleDelete = async () => {
+    if (!canDelete) return;
+    setError(""); setDeleting(true);
+    try { await api.deleteAccount(auth.token); onDeleted(); }
+    catch (err) { setError(err.message || "Could not delete account."); setDeleting(false); }
+  };
+
+  return (
+    <div style={{ maxWidth: 560, margin: "0 auto", padding: "48px 24px 100px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", marginBottom: 24, fontFamily: "'Roboto',sans-serif" }}>← Back</button>
+      <h1 style={{ fontSize: 26, fontWeight: 700, color: "#111827", marginBottom: 6 }}>Account</h1>
+      <p style={{ color: "#6B7280", fontSize: 14, marginBottom: 28 }}>Manage your Resume CoPilot account.</p>
+
+      <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 12, padding: 22, marginBottom: 24 }}>
+        <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 6 }}>Email</p>
+        <p style={{ fontSize: 14, color: "#111827", margin: 0, wordBreak: "break-all" }}>{email}</p>
+      </div>
+
+      <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 12, padding: 22, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <h2 style={{ fontSize: 15, fontWeight: 700, color: "#991B1B", marginBottom: 4 }}>Danger zone</h2>
+          <p style={{ fontSize: 13, color: "#7F1D1D", margin: 0, lineHeight: 1.6 }}>
+            Deleting your account permanently removes your resumes, analysis history, and credit balance. <strong>This cannot be undone.</strong>
+          </p>
+        </div>
+        {!showConfirm ? (
+          <button
+            onClick={() => setShowConfirm(true)}
+            style={{ alignSelf: "flex-start", background: "#FFFFFF", border: "1px solid #FCA5A5", color: "#DC2626", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Roboto',sans-serif" }}
+          >
+            Delete my account
+          </button>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <p style={{ fontSize: 12, color: "#7F1D1D", margin: 0 }}>
+              To confirm, type your email <strong>{email}</strong> below.
+            </p>
+            <input
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={email}
+              style={{ width: "100%", background: "#FFFFFF", border: "1px solid #FCA5A5", borderRadius: 8, color: "#111827", fontSize: 14, padding: "10px 14px", outline: "none", boxSizing: "border-box", fontFamily: "'Roboto',sans-serif" }}
+            />
+            {error && <p style={{ fontSize: 12, color: "#991B1B", margin: 0 }}>{error}</p>}
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => { setShowConfirm(false); setConfirmText(""); setError(""); }}
+                disabled={deleting}
+                style={{ background: "transparent", border: "1px solid #E5E7EB", color: "#6B7280", borderRadius: 8, padding: "9px 18px", fontSize: 13, cursor: "pointer", fontFamily: "'Roboto',sans-serif" }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={!canDelete || deleting}
+                style={{
+                  background: canDelete ? "#DC2626" : "#FCA5A5",
+                  border: "none", color: "#FFFFFF", borderRadius: 8, padding: "9px 18px",
+                  fontSize: 13, fontWeight: 700, cursor: canDelete && !deleting ? "pointer" : "not-allowed",
+                  fontFamily: "'Roboto',sans-serif", opacity: deleting ? 0.7 : 1,
+                }}
+              >
+                {deleting ? "Deleting…" : "Permanently delete"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -990,7 +1253,7 @@ function ImportLanding({ onImportFile, importing, importError, onDismissError, o
 }
 
 // ── Export modal ──────────────────────────────────────────────────────────────
-function ExportModal({ resume, onExport, onCancel, exporting }) {
+function ExportModal({ resume, onExport, onCancel, exporting, error }) {
   const defaultName = resume.basics?.name
     ? resume.basics.name.trim().replace(/\s+/g, "_") + "_Resume"
     : "Resume";
@@ -1028,6 +1291,12 @@ function ExportModal({ resume, onExport, onCancel, exporting }) {
             </div>
           </div>
         </div>
+
+        {error && (
+          <p style={{ fontSize: 12, color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", margin: 0 }}>
+            {error}
+          </p>
+        )}
 
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <GhostBtn onClick={onCancel} disabled={exporting}>Cancel</GhostBtn>
@@ -1146,11 +1415,28 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
   const [leftTab, setLeftTab]                   = useState("analyze"); // "analyze" | "history"
   const [importSuccess, setImportSuccess]       = useState(false);
   const importSuccessTimer                      = useRef(null);
+  const saveMsgTimerRef                         = useRef(null);
   const replaceFileRef                          = useRef();
   const editorScrollRef                         = useRef();
+
+  // Clean up pending timers on unmount
+  useEffect(() => () => {
+    clearTimeout(importSuccessTimer.current);
+    clearTimeout(saveMsgTimerRef.current);
+    clearTimeout(copyPlainTextTimerRef.current);
+  }, []);
   const [showExportModal, setShowExportModal]   = useState(false);
+  const [exportError, setExportError]           = useState("");
+  const [copiedPlainText, setCopiedPlainText]   = useState(false);
+  const copyPlainTextTimerRef                   = useRef(null);
+
+  const handleCopyPlainText = () => {
+    navigator.clipboard.writeText(resumeToPlainText(resume));
+    setCopiedPlainText(true);
+    clearTimeout(copyPlainTextTimerRef.current);
+    copyPlainTextTimerRef.current = setTimeout(() => setCopiedPlainText(false), 2000);
+  };
   const [jobInput, setJobInput]                 = useState("");
-  const [inputMode, setInputMode]               = useState("paste");
   const [analysisStep, setAnalysisStep]         = useState("idle");
   const [analysis, setAnalysis]                 = useState(null);
   const [analysisError, setAnalysisError]       = useState("");
@@ -1199,7 +1485,10 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
     });
   };
 
-  const handleChange = (next) => setResume(normalizeResume(next));
+  // Editor mutations preserve shape (spread-based), so skip normalization on
+  // every keystroke. Normalization happens at boundaries: load, save, preview,
+  // analyze, export.
+  const handleChange = (next) => setResume(next);
 
   const handleGoPreview = async () => {
     const cleaned = normalizeResume({
@@ -1220,15 +1509,22 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.saveResume(resume, resumeName, auth.token);
+      const normalized = normalizeResume(resume);
+      await api.saveResume(normalized, resumeName, auth.token);
       setSaveMsg("Saved!"); setIsImported(false);
-      setTimeout(() => setSaveMsg(""), 2000);
-    } catch { setSaveMsg("Save failed"); }
+      clearTimeout(saveMsgTimerRef.current);
+      saveMsgTimerRef.current = setTimeout(() => setSaveMsg(""), 2000);
+    } catch {
+      setSaveMsg("Save failed");
+      clearTimeout(saveMsgTimerRef.current);
+      saveMsgTimerRef.current = setTimeout(() => setSaveMsg(""), 4000);
+    }
     finally { setSaving(false); }
   };
 
   const handleExport = async (filename) => {
     setExporting(true);
+    setExportError("");
     try {
       const blob = await api.exportDocx(resume, auth.token);
       const url  = URL.createObjectURL(blob);
@@ -1236,18 +1532,20 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
       a.href = url; a.download = `${filename || resumeName || "Resume"}.docx`; a.click();
       URL.revokeObjectURL(url);
       setShowExportModal(false);
-    } catch (err) { alert("Export failed: " + err.message); }
+    } catch (err) {
+      console.error("Export error:", err.message);
+      setExportError("Export failed. Please try again.");
+    }
     finally { setExporting(false); }
   };
 
   const handleAnalyze = async () => {
     if (!jobInput.trim()) return;
-    if (inputMode === "url") return;
     setAnalysisError(""); setAnalysisStep("loading");
     try {
       const text = resumeToPlainText(resume);
       if (!text.trim()) { setAnalysisError("Your resume is empty — fill in the editor first."); setAnalysisStep("idle"); return; }
-      const data = await api.analyze(text, jobInput.trim(), inputMode, auth.token);
+      const data = await api.analyze(text, jobInput.trim(), "paste", auth.token);
       const { creditsRemaining, ...analysisData } = data;
       setAnalysis(analysisData); setAnalysisStep("results"); setAppliedEdits(new Set());
       if (onAnalysisComplete) onAnalysisComplete(creditsRemaining);
@@ -1265,6 +1563,19 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
     const next = applyEditToResume(resume, edit);
     if (next) { setResume(normalizeResume(next)); setAppliedEdits((prev) => new Set([...prev, editIdx])); return true; }
     return false;
+  };
+
+  const handleApplyAll = () => {
+    if (!analysis?.edits) return;
+    let working = resume;
+    const newApplied = new Set(appliedEdits);
+    analysis.edits.forEach((edit, idx) => {
+      if (newApplied.has(idx)) return;
+      const next = applyEditToResume(working, edit);
+      if (next) { working = next; newApplied.add(idx); }
+    });
+    setResume(normalizeResume(working));
+    setAppliedEdits(newApplied);
   };
 
   if (loadingResume) {
@@ -1301,6 +1612,11 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
   }
 
   const hasAnalysis = analysisStep === "results" && !!analysis;
+  const resumeIsEmpty =
+    !resume.basics.name &&
+    !resume.experience.length &&
+    !resume.projects.length &&
+    !resume.education.length;
 
   const jiStyle = {
     width: "100%", background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 10,
@@ -1402,29 +1718,17 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
                       {analysisError && (
                         <p style={{ color: "#DC2626", fontSize: 12, margin: 0, background: "#FEF2F2", padding: "8px 12px", borderRadius: 6, border: "1px solid #FECACA" }}>{analysisError}</p>
                       )}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job</span>
-                        <TabBar
-                          options={[{ value: "paste", label: "Paste JD" }, { value: "url", label: "Job URL (Coming Soon)" }]}
-                          value={inputMode}
-                          onChange={(val) => { if (val !== "url") setInputMode(val); }}
-                          disabledValues={["url"]}
-                        />
-                      </div>
-                      {inputMode === "paste" ? (
-                        <>
-                          <textarea style={{ ...jiStyle, minHeight: 140, resize: "vertical" }} placeholder="Paste the full job description here…" value={jobInput} onChange={(e) => setJobInput(e.target.value)} />
-                          <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>For best results, paste the full job description.</p>
-                        </>
-                      ) : (
-                        <div style={{ opacity: 0.5, pointerEvents: "none" }}>
-                          <input disabled style={{ ...jiStyle, cursor: "not-allowed" }} placeholder="https://jobs.lever.co/company/role-id" value="" readOnly />
-                          <p style={{ fontSize: 11, color: "#6B7280", marginTop: 8, lineHeight: 1.5 }}>We're working on reliable job extraction. For now, please paste the job description manually.</p>
-                        </div>
-                      )}
-                      <PrimaryBtn onClick={handleAnalyze} disabled={!jobInput.trim() || inputMode === "url"} style={{ width: "100%", padding: "12px", fontSize: 14 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280" }}>Job Description</span>
+                      <textarea style={{ ...jiStyle, minHeight: 140, resize: "vertical" }} placeholder="Paste the full job description here…" value={jobInput} onChange={(e) => setJobInput(e.target.value)} />
+                      <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, lineHeight: 1.5 }}>For best results, paste the full job description.</p>
+                      <PrimaryBtn onClick={handleAnalyze} disabled={!jobInput.trim() || resumeIsEmpty} style={{ width: "100%", padding: "12px", fontSize: 14 }}>
                         Analyze →
                       </PrimaryBtn>
+                      {resumeIsEmpty && (
+                        <p style={{ fontSize: 11, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
+                          Fill in your resume on the right before analyzing.
+                        </p>
+                      )}
                       {creditBalance !== null && (
                         <p style={{ fontSize: 12, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
                           ⚡ {creditBalance} credit{creditBalance === 1 ? "" : "s"} remaining
@@ -1440,6 +1744,8 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
                       analysis={analysis}
                       onReset={() => { setAnalysis(null); setAnalysisStep("idle"); }}
                       onApply={handleApplyEdit}
+                      onApplyAll={handleApplyAll}
+                      onReAnalyze={handleAnalyze}
                       appliedEdits={appliedEdits}
                     />
                   )}
@@ -1476,8 +1782,9 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
           <ExportModal
             resume={resume}
             onExport={handleExport}
-            onCancel={() => setShowExportModal(false)}
+            onCancel={() => { setShowExportModal(false); setExportError(""); }}
             exporting={exporting}
+            error={exportError}
           />
         )}
         <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 50px)" }}>
@@ -1485,6 +1792,9 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
             <GhostBtn onClick={() => setStage("edit")} style={{ fontSize: 13, padding: "7px 16px", justifySelf: "start" }}>← Edit</GhostBtn>
             <Stepper stage="preview" />
             <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end" }}>
+              <GhostBtn onClick={handleCopyPlainText} style={{ fontSize: 13, padding: "7px 14px" }}>
+                {copiedPlainText ? "✓ Copied" : "Copy as plain text"}
+              </GhostBtn>
               <PrimaryBtn onClick={() => setShowExportModal(true)} style={{ fontSize: 13, padding: "8px 16px" }}>Export DOCX</PrimaryBtn>
               <div title={!hasAnalysis ? "Run analysis in Stage 1 to unlock outreach" : ""} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
                 <GhostBtn onClick={() => setStage("outreach")} disabled={!hasAnalysis} style={{ fontSize: 13, padding: "7px 14px" }}>
@@ -1590,8 +1900,10 @@ function ContactPage({ onBack }) {
 }
 
 // ── Pricing page ──────────────────────────────────────────────────────────────
-function PricingPage({ onBack, onSignUp }) {
+function PricingPage({ onBack, onSignUp, auth, onGoEditor }) {
   const [currencyData, setCurrencyData] = useState(null);
+  const ctaHandler = auth ? onGoEditor : onSignUp;
+  const ctaLabel   = auth ? "Open editor →" : "Get started →";
 
   useEffect(() => {
     api.getCurrency()
@@ -1650,10 +1962,10 @@ function PricingPage({ onBack, onSignUp }) {
                 <div style={{ fontSize: 13, color: "#2563EB", fontWeight: 600 }}>{pkg.credits} analyses</div>
                 <div style={{ fontSize: 12, color: "#9CA3AF" }}>{pkg.per_analysis}</div>
                 <button
-                  onClick={onSignUp}
+                  onClick={ctaHandler}
                   style={{ marginTop: "auto", background: meta.best ? "#2563EB" : "transparent", color: meta.best ? "#FFFFFF" : "#2563EB", border: meta.best ? "none" : "1px solid #BFDBFE", borderRadius: 10, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Roboto',sans-serif" }}
                 >
-                  Get started →
+                  {ctaLabel}
                 </button>
               </div>
             );
@@ -1886,13 +2198,16 @@ export default function App() {
   const [auth, setAuth]         = useState(loadAuth);
   const [page, setPage]         = useState(() => {
     const path = window.location.pathname;
-    if (path === "/credits/success") return "credits-success";
-    if (path === "/credits/cancel")  return "credits-cancel";
-    if (path === "/pricing")         return "pricing";
-    if (path === "/contact")         return "contact";
-    if (path === "/privacy")         return "privacy";
-    if (path === "/terms")           return "terms";
-    if (path === "/refund")          return "refund";
+    if (path === "/credits/success")  return "credits-success";
+    if (path === "/credits/cancel")   return "credits-cancel";
+    if (path === "/pricing")          return "pricing";
+    if (path === "/contact")          return "contact";
+    if (path === "/privacy")          return "privacy";
+    if (path === "/terms")            return "terms";
+    if (path === "/refund")           return "refund";
+    if (path === "/forgot-password")  return "forgot-password";
+    if (path === "/reset-password")   return "reset-password";
+    if (path === "/account")          return "account";
     return "home";
   });
 
@@ -1925,13 +2240,16 @@ export default function App() {
   // Sync page state with browser back/forward navigation
   useEffect(() => {
     const pathToPage = (path) => {
-      if (path === "/credits/success") return "credits-success";
+      if (path === "/credits/success")  return "credits-success";
       if (path === "/credits/cancel")  return "credits-cancel";
       if (path === "/pricing")         return "pricing";
       if (path === "/contact")         return "contact";
       if (path === "/privacy")         return "privacy";
       if (path === "/terms")           return "terms";
       if (path === "/refund")          return "refund";
+      if (path === "/forgot-password") return "forgot-password";
+      if (path === "/reset-password")  return "reset-password";
+      if (path === "/account")         return "account";
       return "home";
     };
     const handlePop = () => setPage(pathToPage(window.location.pathname));
@@ -1944,6 +2262,7 @@ export default function App() {
     // Balance will load via useEffect watching auth.token
   };
   const handleLogout = () => { setAuth(null); clearAuth(); setCreditBalance(null); setPage("home"); };
+  const handleAccountDeleted = () => { setAuth(null); clearAuth(); setCreditBalance(null); navigate("home"); };
   const goLogin    = () => { setAuthMode("login");    setPage("login"); };
   const goRegister = () => { setAuthMode("register"); setPage("login"); };
 
@@ -1989,7 +2308,23 @@ export default function App() {
             {auth ? (
               <>
                 <CreditsBadge balance={creditBalance} onOpenModal={() => setShowBuyModal(true)} />
-                <span style={{ fontSize: 12, color: "#6B7280" }}>{auth.user?.email}</span>
+                <button
+                  onClick={() => navigate("account", "/account")}
+                  title={`${auth.user?.email} — account settings`}
+                  style={{
+                    background: "none", border: "none", padding: 0, cursor: "pointer",
+                    fontFamily: "'Roboto',sans-serif",
+                    fontSize: 12, color: "#6B7280",
+                    maxWidth: 200, overflow: "hidden",
+                    textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    textDecoration: "underline", textDecorationColor: "transparent",
+                    transition: "text-decoration-color 0.15s",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.textDecorationColor = "#9CA3AF")}
+                  onMouseLeave={(e) => (e.currentTarget.style.textDecorationColor = "transparent")}
+                >
+                  {auth.user?.email}
+                </button>
                 <GhostBtn onClick={handleLogout} style={{ fontSize: 12, padding: "5px 14px" }}>Logout</GhostBtn>
               </>
             ) : (
@@ -2011,7 +2346,32 @@ export default function App() {
               onAuth={handleAuth}
               onToggle={() => setAuthMode(authMode === "login" ? "register" : "login")}
               onBack={() => navigate("home")}
+              onForgot={() => navigate("forgot-password", "/forgot-password")}
             />
+          )}
+          {page === "forgot-password" && (
+            <ForgotPasswordPage
+              onBack={() => navigate("home")}
+              onGoLogin={() => { setAuthMode("login"); navigate("login"); }}
+            />
+          )}
+          {page === "reset-password" && (
+            <ResetPasswordPage
+              onGoLogin={() => { setAuthMode("login"); navigate("login"); }}
+            />
+          )}
+          {page === "account" && auth && (
+            <AccountPage
+              auth={auth}
+              onBack={() => navigate("home")}
+              onDeleted={handleAccountDeleted}
+            />
+          )}
+          {page === "account" && !auth && (
+            <div style={{ textAlign: "center", padding: "80px 20px" }}>
+              <p style={{ color: "#6B7280", marginBottom: 16 }}>Please log in to view your account.</p>
+              <PrimaryBtn onClick={goLogin}>Login</PrimaryBtn>
+            </div>
           )}
           {page === "editor"  && auth && (
             <EditorPage
@@ -2037,7 +2397,14 @@ export default function App() {
           {page === "credits-cancel" && (
             <CreditsCancelPage onGoEditor={() => setPage(auth ? "editor" : "home")} />
           )}
-          {page === "pricing" && <PricingPage onBack={() => navigate("home")} onSignUp={goRegister} />}
+          {page === "pricing" && (
+            <PricingPage
+              onBack={() => navigate("home")}
+              onSignUp={goRegister}
+              auth={auth}
+              onGoEditor={() => setPage("editor")}
+            />
+          )}
           {page === "contact" && <ContactPage onBack={() => navigate("home")} />}
           {page === "privacy" && <PrivacyPage onBack={() => navigate("home")} />}
           {page === "terms"   && <TermsPage   onBack={() => navigate("home")} />}

@@ -130,11 +130,20 @@ export function resumeToHtml(resume) {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
 
+  // Only allow http(s) and mailto schemes. Anything else (javascript:, data:,
+  // file:, vbscript:, etc.) becomes "#" so the link is inert.
+  const safeHref = (url) => {
+    const s = String(url || "").trim();
+    if (!s) return "#";
+    if (/^(https?:|mailto:)/i.test(s)) return s;
+    return "#";
+  };
+
   const contactParts = [d.basics.location, d.basics.phone, d.basics.email].filter(Boolean).map(esc);
   for (const l of d.basics.links) {
     if (!l.label && !l.url) continue;
     const label = esc(l.label || l.url);
-    const href  = esc(l.url || "#");
+    const href  = esc(safeHref(l.url));
     contactParts.push(`<a href="${href}">${label}</a>`);
   }
 

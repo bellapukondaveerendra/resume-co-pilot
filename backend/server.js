@@ -1,22 +1,25 @@
 import "dotenv/config";
+import crypto from "crypto";
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
 import multer from "multer";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import Anthropic from "@anthropic-ai/sdk";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 import Stripe from "stripe";
 import axios from "axios";
+import cron from "node-cron";
+import { Resend } from "resend";
 import {
   Document, Packer, Paragraph, TextRun, AlignmentType,
   TabStopType, BorderStyle, convertInchesToTwip,
 } from "docx";
 import { pool, query, initSchema } from "./db.js";
-import { guestRateLimit } from "./middleware/rateLimit.js";
+import { guestRateLimit, GUEST_LIMIT } from "./middleware/rateLimit.js";
 
 // ── Startup env check ──────────────────────────────────────────────────────────
 
@@ -34,6 +37,8 @@ const PORT        = process.env.PORT || 3001;
 const stripe      = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
 const client      = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const upload      = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const resend      = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const RESET_FROM  = "Resume CoPilot <noreply@ashborntech.org>";
 
 // ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -63,6 +68,26 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many attempts, please try again later." },
+});
+
+// Per-user limit on AI-backed import (prevents Anthropic budget abuse).
+// Runs AFTER requireAuth so req.user is populated.
+const importLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.user?.id ? `u:${req.user.id}` : ipKeyGenerator(req.ip)),
+  message: { error: "Too many resume imports this hour. Please try again later." },
+});
+
+// Per-IP limit on file extraction (guest-accessible, no auth required).
+const extractLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many extract requests this hour. Please try again later." },
 });
 
 // ── Stripe webhook (raw body — must be registered BEFORE express.json()) ──────
@@ -114,14 +139,32 @@ app.use(express.json({ limit: "2mb" }));
 
 // ── Auth middleware ────────────────────────────────────────────────────────────
 
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized" });
+  let payload;
   try {
-    req.user = jwt.verify(header.slice(7), JWT_SECRET);
-    next();
+    payload = jwt.verify(header.slice(7), JWT_SECRET);
   } catch {
-    res.status(401).json({ error: "Invalid or expired token" });
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+  if (typeof payload !== "object" || !payload.id) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+  try {
+    const result = await query("SELECT token_version FROM users WHERE id = $1", [payload.id]);
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+    const tokenVersion = payload.token_version ?? 0;
+    if (tokenVersion !== result.rows[0].token_version) {
+      return res.status(401).json({ error: "Token has been revoked", code: "TOKEN_REVOKED" });
+    }
+    req.user = payload;
+    next();
+  } catch (err) {
+    console.error("Auth error:", err.message);
+    res.status(500).json({ error: "Authentication failed" });
   }
 }
 
@@ -308,14 +351,19 @@ app.post("/api/auth/register", authLimiter, async (req, res) => {
     await dbClient.query("INSERT INTO credits (user_id, balance) VALUES ($1, 5)", [id]);
     await dbClient.query("COMMIT");
 
-    // Prevent double-dipping: cap this IP's guest usage so the new account holder
-    // can't bypass credit limits by opening incognito and using guest mode.
+    // Prevent double-dipping: cap this IP's guest usage at GUEST_LIMIT so the
+    // new account holder can't bypass credit limits by opening incognito and
+    // using guest mode again.
     query(
-      "INSERT INTO guest_usage (ip, count) VALUES ($1, 5) ON CONFLICT (ip) DO UPDATE SET count = GREATEST(guest_usage.count, 5)",
-      [req.ip]
+      "INSERT INTO guest_usage (ip, count) VALUES ($1, $2) ON CONFLICT (ip) DO UPDATE SET count = GREATEST(guest_usage.count, $2)",
+      [req.ip, GUEST_LIMIT]
     ).catch(() => {}); // non-critical
 
-    const token = jwt.sign({ id, email: email.toLowerCase().trim() }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign(
+      { id, email: email.toLowerCase().trim(), token_version: 0 },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
     res.json({ token, user: { id, email: email.toLowerCase().trim() } });
   } catch (err) {
     await dbClient.query("ROLLBACK");
@@ -337,7 +385,11 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.hash))) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
-    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign(
+      { id: user.id, email: user.email, token_version: user.token_version ?? 0 },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
     res.json({ token, user: { id: user.id, email: user.email } });
   } catch (err) {
     console.error("Login error:", err.message);
@@ -345,8 +397,110 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
   }
 });
 
+// Auth — forgot password (send reset email)
+// Always returns 200 to prevent email enumeration; logs internally if user missing.
+app.post("/api/auth/forgot-password", authLimiter, async (req, res) => {
+  const { email } = req.body || {};
+  if (!email || !EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: "Valid email required" });
+  }
+  const normalizedEmail = email.toLowerCase().trim();
+
+  try {
+    const userResult = await query("SELECT id FROM users WHERE email = $1", [normalizedEmail]);
+    const user = userResult.rows[0];
+
+    if (user) {
+      const token      = crypto.randomBytes(32).toString("hex");
+      const tokenHash  = crypto.createHash("sha256").update(token).digest("hex");
+      const expiresAt  = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+      await query(
+        "INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+        [user.id, tokenHash, expiresAt]
+      );
+
+      const appUrl    = process.env.APP_URL || "http://localhost:5173";
+      const resetLink = `${appUrl}/reset-password?token=${token}`;
+
+      if (resend) {
+        try {
+          await resend.emails.send({
+            from: RESET_FROM,
+            to: normalizedEmail,
+            subject: "Reset your Resume CoPilot password",
+            html: `
+              <p>Hi,</p>
+              <p>You requested a password reset for your Resume CoPilot account.</p>
+              <p>Click the link below to set a new password. This link expires in 15 minutes.</p>
+              <p><a href="${resetLink}">Reset password</a></p>
+              <p>If you didn't request this, you can safely ignore this email.</p>
+              <p>— Resume CoPilot</p>
+            `,
+          });
+        } catch (sendErr) {
+          console.error("Resend send error:", sendErr.message);
+          // Swallow — generic success below avoids leaking delivery failures.
+        }
+      } else {
+        // Dev fallback when RESEND_API_KEY is unset.
+        console.log(`[dev] Password reset link for ${normalizedEmail}: ${resetLink}`);
+      }
+    }
+  } catch (err) {
+    console.error("Forgot-password error:", err.message);
+  }
+
+  // Always generic success.
+  res.json({ ok: true });
+});
+
+// Auth — reset password (consume token, change password, bump token_version)
+app.post("/api/auth/reset-password", authLimiter, async (req, res) => {
+  const { token, password } = req.body || {};
+  if (!token || typeof token !== "string") {
+    return res.status(400).json({ error: "Invalid or missing reset token" });
+  }
+  if (!password || password.length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  }
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const dbClient  = await pool.connect();
+  try {
+    await dbClient.query("BEGIN");
+    const r = await dbClient.query(
+      `SELECT id, user_id FROM password_resets
+       WHERE token_hash = $1 AND used = FALSE AND expires_at > NOW()
+       FOR UPDATE`,
+      [tokenHash]
+    );
+    const row = r.rows[0];
+    if (!row) {
+      await dbClient.query("ROLLBACK");
+      return res.status(400).json({ error: "This reset link is invalid or has expired." });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    await dbClient.query(
+      "UPDATE users SET hash = $1, token_version = token_version + 1 WHERE id = $2",
+      [hash, row.user_id]
+    );
+    await dbClient.query("UPDATE password_resets SET used = TRUE WHERE id = $1", [row.id]);
+    await dbClient.query("COMMIT");
+
+    res.json({ ok: true });
+  } catch (err) {
+    await dbClient.query("ROLLBACK").catch(() => {});
+    console.error("Reset-password error:", err.message);
+    res.status(500).json({ error: "Password reset failed. Please try again." });
+  } finally {
+    dbClient.release();
+  }
+});
+
 // Extract text from PDF or DOCX
-app.post("/api/extract", upload.single("file"), async (req, res) => {
+app.post("/api/extract", extractLimiter, upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file provided" });
   const name = req.file.originalname.toLowerCase();
   try {
@@ -362,7 +516,8 @@ app.post("/api/extract", upload.single("file"), async (req, res) => {
     }
     res.json({ text: text.trim() });
   } catch (err) {
-    res.status(500).json({ error: "Could not extract text: " + err.message });
+    console.error("Extract error:", err.message);
+    res.status(500).json({ error: "Could not extract text from this file. Please try a different file." });
   }
 });
 
@@ -411,6 +566,10 @@ app.post("/api/analyze", (req, res, next) => {
       coldEmail: {
         subject: "Interest in Software Engineer role at Mock Corp",
         body: "Hi,\n\nI came across the Software Engineer opening at Mock Corp and was excited by the focus on distributed systems.\n\nI bring 3+ years building scalable microservices at Darwinbox, where I reduced p99 latency by 70% and achieved 99.9% uptime on Kubernetes. I'd love to bring that experience to your team.\n\nWould you be open to a quick chat?\n\nBest,\nVeerendra",
+      },
+      coverLetter: {
+        subject: "Application for Software Engineer at Mock Corp",
+        body: "Dear [Hiring Manager],\n\nI am writing to express my strong interest in the Software Engineer role at Mock Corp. The team's focus on distributed systems and high-availability infrastructure aligns closely with the work I have done over the past three years.\n\nAt Darwinbox, I designed and shipped containerized microservices on Kubernetes that reduced p99 latency by 70% and held 99.9% uptime under production load. I worked across the stack — from API design in Node.js to data modeling in PostgreSQL — and I am comfortable owning a service end to end. The cloud and orchestration skills mentioned in your job description map directly onto the foundation I have built.\n\nI am particularly drawn to Mock Corp's emphasis on engineering rigor and would welcome the chance to contribute. I would be glad to discuss in more detail how my background fits the role and the team's near-term goals.\n\nThank you for your time and consideration. I look forward to hearing from you.\n\nSincerely,\n[Your Name]",
       },
     });
   }
@@ -466,6 +625,11 @@ OUTPUT FORMAT
   "coldEmail": {
     "subject": "",
     "body": "4-6 sentence professional email"
+  },
+
+  "coverLetter": {
+    "subject": "Application subject line",
+    "body": "3-4 paragraph formal cover letter"
   }
 }
 
@@ -564,6 +728,30 @@ Placeholders:
 - Do NOT invent or assume the recipient's name or role
 
 --------------------------------------------------
+COVER LETTER RULES
+--------------------------------------------------
+
+Generate a formal cover letter the candidate can attach or paste into an application form.
+
+- Subject line: "Application for [Role] at [Company]" — use the actual role and company
+- Greeting: "Dear [Hiring Manager]," — never assume a name
+- Structure: 3-4 paragraphs
+  - Paragraph 1: state interest in the specific role at the specific company; brief hook
+  - Paragraph 2: highlight 2-3 most relevant achievements or skills FROM THE RESUME ONLY
+    that align with the job's stated requirements
+  - Paragraph 3 (optional): connection to the company's stated mission, values, or product
+  - Final paragraph: confident close, invite a conversation
+- Sign-off: "Sincerely,\n[Your Name]"
+- Tone: professional but human, never stiff or generic
+- Length: 250-350 words
+- Use ONLY information present in the resume — never invent experience, metrics, or skills
+
+Placeholders allowed:
+- [Hiring Manager] in greeting
+- [Your Name] in sign-off
+- Do NOT use [Company Name], [Position], or any other placeholder — fill those from the JD
+
+--------------------------------------------------
 QUALITY GUIDELINES
 --------------------------------------------------
 
@@ -601,12 +789,19 @@ QUALITY GUIDELINES
 
     res.json({ ...parsed, creditsRemaining });
   } catch (err) {
-    // Refund credit if the AI call failed after we already deducted
+    // Refund credit if the AI call failed after we already deducted.
+    // If the refund itself fails, log it to failed_refunds for manual reconciliation.
     if (req.user && creditsRemaining !== null) {
       await query(
         "UPDATE credits SET balance = balance + 1, updated_at = NOW() WHERE user_id = $1",
         [req.user.id]
-      ).catch((e) => console.error("Credit refund error:", e.message));
+      ).catch(async (e) => {
+        console.error("Credit refund error:", e.message);
+        await query(
+          "INSERT INTO failed_refunds (user_id, amount, reason, error_msg) VALUES ($1, 1, 'analysis_failed', $2)",
+          [req.user.id, e.message]
+        ).catch((ee) => console.error("Failed to log refund failure:", ee.message));
+      });
     }
     console.error("Analyze error:", err.message);
     const userMsg = err.message?.includes("timed out")
@@ -769,7 +964,7 @@ ${text}
 
 Output the JSON object now:`;
 
-app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, res) => {
+app.post("/api/import-resume", requireAuth, importLimiter, upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded." });
 
   const name = req.file.originalname.toLowerCase();
@@ -786,7 +981,8 @@ app.post("/api/import-resume", requireAuth, upload.single("file"), async (req, r
       return res.status(400).json({ error: "Only PDF and DOCX files are supported." });
     }
   } catch (err) {
-    return res.status(422).json({ error: "Could not read file: " + err.message });
+    console.error("Import read error:", err.message);
+    return res.status(422).json({ error: "Could not read this file. Please try a different file." });
   }
 
   if (!text) {
@@ -952,6 +1148,21 @@ app.post("/api/credits/checkout", requireAuth, async (req, res) => {
   }
 });
 
+// ── Account routes ─────────────────────────────────────────────────────────────
+
+// Permanently delete the user's account. FK CASCADE removes resumes, credits,
+// credit_txns, analysis_history, password_resets. failed_refunds has no FK so
+// audit log is preserved.
+app.delete("/api/account", requireAuth, async (req, res) => {
+  try {
+    await query("DELETE FROM users WHERE id = $1", [req.user.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Account delete error:", err.message);
+    res.status(500).json({ error: "Could not delete account. Please try again." });
+  }
+});
+
 // ── Analysis history routes ────────────────────────────────────────────────────
 
 app.get("/api/analyses", requireAuth, async (req, res) => {
@@ -1003,6 +1214,36 @@ if (process.env.SERVE_STATIC === "true") {
     if (existsSync(indexPath)) res.sendFile(indexPath);
     else res.status(404).send("Frontend not built. Run: cd frontend && npm run build");
   });
+}
+
+// ── Monthly free credit refill ────────────────────────────────────────────────
+// Opt-in via ENABLE_MONTHLY_REFILL=true. Runs at 00:00 UTC on the 1st of each
+// month. Tops up any user with balance < 2 credits up to 2, and logs each
+// top-up as a credit_txn for auditability.
+async function runMonthlyRefill() {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const insertResult = await c.query(
+      `INSERT INTO credit_txns (user_id, delta, reason)
+       SELECT user_id, 2 - balance, 'monthly_refill'
+       FROM credits WHERE balance < 2
+       RETURNING user_id`
+    );
+    await c.query("UPDATE credits SET balance = 2, updated_at = NOW() WHERE balance < 2");
+    await c.query("COMMIT");
+    console.log(`Monthly refill: ${insertResult.rowCount} user(s) topped up.`);
+  } catch (err) {
+    await c.query("ROLLBACK").catch(() => {});
+    console.error("Monthly refill error:", err.message);
+  } finally {
+    c.release();
+  }
+}
+
+if (process.env.ENABLE_MONTHLY_REFILL === "true") {
+  cron.schedule("0 0 1 * *", runMonthlyRefill, { timezone: "UTC" });
+  console.log("Monthly credit refill scheduled (00:00 UTC on 1st of each month).");
 }
 
 // ── Start + graceful shutdown ─────────────────────────────────────────────────

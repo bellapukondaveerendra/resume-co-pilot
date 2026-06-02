@@ -1,17 +1,24 @@
 import { query } from "../db.js";
 
+// Configurable via env. Falls back to 10 if unset or non-numeric.
+export const GUEST_LIMIT = Number.isInteger(parseInt(process.env.GUEST_LIMIT, 10))
+  ? parseInt(process.env.GUEST_LIMIT, 10)
+  : 10;
+
 export async function guestRateLimit(req, res, next) {
   const ip = req.ip;
   try {
-    const result = await query("SELECT count FROM guest_usage WHERE ip = $1", [ip]);
-    const row = result.rows[0];
-    if (row && row.count >= 5) {
-      return res.status(429).json({ error: "Guest limit reached", code: "GUEST_LIMIT", limit: 5 });
-    }
-    await query(
-      "INSERT INTO guest_usage (ip, count) VALUES ($1, 1) ON CONFLICT (ip) DO UPDATE SET count = guest_usage.count + 1",
+    // Atomic increment + check — prevents race where two concurrent requests
+    // both read count<5 and then both increment past the limit.
+    const result = await query(
+      `INSERT INTO guest_usage (ip, count) VALUES ($1, 1)
+       ON CONFLICT (ip) DO UPDATE SET count = guest_usage.count + 1
+       RETURNING count`,
       [ip]
     );
+    if (result.rows[0].count > GUEST_LIMIT) {
+      return res.status(429).json({ error: "Guest limit reached", code: "GUEST_LIMIT", limit: GUEST_LIMIT });
+    }
     next();
   } catch (err) {
     console.error("Rate limit error:", err.message);
