@@ -14,10 +14,9 @@ import Stripe from "stripe";
 import axios from "axios";
 import cron from "node-cron";
 import { Resend } from "resend";
-import {
-  Document, Packer, Paragraph, TextRun, AlignmentType,
-  TabStopType, BorderStyle, convertInchesToTwip,
-} from "docx";
+import PizZip from "pizzip";
+import Docxtemplater from "docxtemplater";
+import { readFileSync } from "node:fs";
 import { pool, query, initSchema } from "./db.js";
 import { guestRateLimit, GUEST_LIMIT } from "./middleware/rateLimit.js";
 
@@ -168,149 +167,215 @@ async function requireAuth(req, res, next) {
   }
 }
 
-// ── DOCX generation ────────────────────────────────────────────────────────────
+// ── DOCX generation (template-based) ──────────────────────────────────────────
+// Reads backend/templates/resume.docx (docxtemplater template with {{tokens}}
+// and {{#Loop}}...{{/Loop}} blocks), feeds it data shaped from our internal
+// resume schema, then post-processes the rendered XML to wrap LinkedIn/GitHub
+// labels in real <w:hyperlink> elements so the links are clickable in Word.
 
-const FONT   = "Georgia";
-const BODY   = 18;
-const TAB    = convertInchesToTwip(6.5);
-const MARGIN = convertInchesToTwip(0.75);
-
-function secHeading(text) {
-  return new Paragraph({
-    spacing: { before: 100, after: 30 },
-    border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: "000000", space: 2 } },
-    children: [new TextRun({ text: text.toUpperCase(), bold: true, font: FONT, size: 20, smallCaps: true })],
-  });
+// Map the user's skill categories 1:1 — the template now loops over Skills[]
+// and renders one row per category, matching what the preview shows.
+function mapSkills(skills) {
+  return (skills || [])
+    .filter((s) => s?.category || s?.items?.length)
+    .map((s) => ({
+      category: s.category || "",
+      items: (s.items || []).filter(Boolean).join(", "),
+    }));
 }
 
-function bullet(text) {
-  return new Paragraph({
-    bullet: { level: 0 },
-    spacing: { before: 10, after: 10 },
-    children: [new TextRun({ text: String(text || ""), font: FONT, size: BODY })],
-  });
+// Pick LinkedIn and GitHub from the user's dynamic links array.
+// Matches by label OR URL substring (handles "LinkedIn", "linkedin.com/in/...", etc.).
+function pickProfileLinks(links) {
+  const find = (kw) => (links || []).find((l) =>
+    new RegExp(kw, "i").test(l?.label || "") || new RegExp(kw, "i").test(l?.url || "")
+  );
+  const li = find("linkedin");
+  const gh = find("github");
+  return {
+    ClientLinkedIn:    li?.label || (li?.url ? "LinkedIn" : ""),
+    ClientLinkedInURL: li?.url   || "",
+    ClientGithub:      gh?.label || (gh?.url ? "GitHub" : ""),
+    ClientGithubURL:   gh?.url   || "",
+  };
 }
+
+// Map experience / projects / education to the loop shapes the template expects.
+function mapExperiences(experience) {
+  return (experience || []).map((e) => ({
+    role:     e?.role     || "",
+    company:  e?.company  || "",
+    location: e?.location || "",
+    start:    e?.start    || "",
+    end:      e?.end      || "",
+    bullets:  (e?.points || []).filter(Boolean),
+  }));
+}
+function mapProjects(projects) {
+  return (projects || []).map((p) => ({
+    name:    p?.name || "",
+    bullets: (p?.points || []).filter(Boolean),
+  }));
+}
+function mapEducation(education) {
+  return (education || []).map((e) => ({
+    institution: e?.institution || e?.school || "",
+    degree:      e?.degree      || "",
+    years:       [e?.start, e?.end].filter(Boolean).join(" – "),
+  }));
+}
+
+// Post-render XML surgery to turn LinkedIn/GitHub label text into real
+// hyperlinks. docxtemplater can't emit <w:hyperlink> natively, so we splice
+// it in by finding the rendered <w:r>...<w:t>label</w:t></w:r> run and
+// wrapping it. Mirrors the resume_generator.html utility's injectHyperlinks.
+function injectHyperlinks(zip, links) {
+  const docFile  = zip.file("word/document.xml");
+  const relsFile = zip.file("word/_rels/document.xml.rels");
+  if (!docFile || !relsFile) return;
+  let xml  = docFile.asText();
+  let rels = relsFile.asText();
+
+  const escAttr = (s) => String(s)
+    .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  for (const { text, url, rid } of links) {
+    if (!url || !text) continue;
+    rels = rels.replace(
+      "</Relationships>",
+      `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${escAttr(url)}" TargetMode="External"/></Relationships>`
+    );
+    const variants = [
+      `<w:t xml:space="preserve">${text}</w:t></w:r>`,
+      `<w:t>${text}</w:t></w:r>`,
+    ];
+    for (const variant of variants) {
+      const idx = xml.indexOf(variant);
+      if (idx === -1) continue;
+      const runStart = xml.lastIndexOf("<w:r>", idx);
+      if (runStart === -1) continue;
+      const runEnd  = idx + variant.length;
+      const fullRun = xml.substring(runStart, runEnd);
+      xml = xml.substring(0, runStart) +
+        `<w:hyperlink r:id="${rid}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${fullRun}</w:hyperlink>` +
+        xml.substring(runEnd);
+      break;
+    }
+  }
+
+  zip.file("word/document.xml", xml);
+  zip.file("word/_rels/document.xml.rels", rels);
+}
+
+// Template path resolved at module load. readFileSync per render is cheap
+// (37 KB) and avoids stale-cache issues if the template is hot-swapped.
+const RESUME_TEMPLATE_PATH = join(dirname(fileURLToPath(import.meta.url)), "templates", "resume.docx");
 
 async function buildDocx(resume) {
-  const { basics, skills = [], experience = [], projects = [], education = [] } = resume;
-  const children = [];
+  const { basics = {}, skills = [], experience = [], projects = [], education = [] } = resume || {};
 
-  children.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 40 },
-      children: [new TextRun({ text: basics.name || "", bold: true, font: FONT, size: 24 })],
-    }),
-  );
+  const profileLinks = pickProfileLinks(basics.links);
 
-  const contactParts = [basics.location, basics.phone, basics.email].filter(Boolean);
-  for (const l of basics.links || []) if (l.label || l.url) contactParts.push(l.label || l.url);
-  children.push(
-    new Paragraph({
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 80 },
-      children: [new TextRun({ text: contactParts.join(" | "), font: FONT, size: BODY })],
-    }),
-  );
+  const data = {
+    ClientName:     basics.name     || "",
+    ClientLocation: basics.location || "",
+    ClientPhone:    basics.phone    || "",
+    ClientMail:     basics.email    || "",
+    ...profileLinks,
+    Skills:      mapSkills(skills),
+    Experiences: mapExperiences(experience),
+    Projects:    mapProjects(projects),
+    Education:   mapEducation(education),
+  };
 
-  const activeSkills = skills.filter((s) => s.category || s.items?.length);
-  if (activeSkills.length) {
-    children.push(secHeading("Technical Skills"));
-    for (const s of activeSkills) {
-      children.push(
-        new Paragraph({
-          spacing: { before: 20, after: 20 },
-          children: [
-            new TextRun({ text: (s.category || "") + ": ", bold: true, font: FONT, size: BODY }),
-            new TextRun({ text: (s.items || []).join(", "), font: FONT, size: BODY }),
-          ],
-        }),
-      );
-    }
-  }
-
-  if (experience.length) {
-    children.push(secHeading("Professional Experience"));
-    for (const exp of experience) {
-      let title = exp.role || "";
-      if (exp.company)  title += ` \u2013 ${exp.company}`;
-      if (exp.location) title += `, ${exp.location}`;
-      const date = [exp.start, exp.end].filter(Boolean).join(" \u2013 ");
-      children.push(
-        new Paragraph({
-          tabStops: [{ type: TabStopType.RIGHT, position: TAB }],
-          spacing: { before: 100, after: 20 },
-          children: [
-            new TextRun({ text: title, bold: true, font: FONT, size: BODY }),
-            ...(date ? [new TextRun({ text: "\t" + date, bold: true, font: FONT, size: BODY })] : []),
-          ],
-        }),
-      );
-      for (const pt of exp.points || []) if (pt) children.push(bullet(pt));
-    }
-  }
-
-  if (projects.length) {
-    children.push(secHeading("Projects"));
-    for (const proj of projects) {
-      children.push(
-        new Paragraph({
-          spacing: { before: 100, after: 20 },
-          children: [new TextRun({ text: proj.name || "", bold: true, font: FONT, size: BODY })],
-        }),
-      );
-      for (const pt of proj.points || []) if (pt) children.push(bullet(pt));
-    }
-  }
-
-  if (education.length) {
-    children.push(secHeading("Education"));
-    for (const edu of education) {
-      const date        = [edu.start, edu.end].filter(Boolean).join(" \u2013 ");
-      const institution = edu.institution || edu.school || "";
-      children.push(
-        new Paragraph({
-          tabStops: [{ type: TabStopType.RIGHT, position: TAB }],
-          spacing: { before: 100, after: 20 },
-          children: [
-            new TextRun({ text: institution, bold: true, font: FONT, size: BODY }),
-            ...(date ? [new TextRun({ text: "\t" + date, bold: true, font: FONT, size: BODY })] : []),
-          ],
-        }),
-      );
-      if (edu.degree) {
-        children.push(
-          new Paragraph({
-            spacing: { before: 20, after: 20 },
-            children: [new TextRun({ text: edu.degree, bold: true, font: FONT, size: BODY })],
-          }),
-        );
-      }
-      if (edu.coursework) {
-        children.push(
-          new Paragraph({
-            spacing: { before: 20, after: 20 },
-            children: [new TextRun({ text: edu.coursework, font: FONT, size: BODY })],
-          }),
-        );
-      }
-    }
-  }
-
-  const doc = new Document({
-    sections: [{
-      properties: { page: { margin: { top: MARGIN, bottom: MARGIN, left: MARGIN, right: MARGIN } } },
-      children,
-    }],
+  const templateBytes = readFileSync(RESUME_TEMPLATE_PATH);
+  const zip = new PizZip(templateBytes);
+  const doc = new Docxtemplater(zip, {
+    paragraphLoop: true,
+    linebreaks:    true,
+    delimiters:    { start: "{{", end: "}}" },
   });
 
-  return Packer.toBuffer(doc);
+  doc.render(data);
+
+  const renderedZip = doc.getZip();
+  injectHyperlinks(renderedZip, [
+    { text: profileLinks.ClientLinkedIn, url: profileLinks.ClientLinkedInURL, rid: "rIdLinkedIn" },
+    { text: profileLinks.ClientGithub,   url: profileLinks.ClientGithubURL,   rid: "rIdGithub"   },
+  ]);
+
+  return renderedZip.generate({ type: "nodebuffer" });
 }
 
 // ── JSON repair helper ────────────────────────────────────────────────────────
 // The AI can return JSON with invalid escape sequences when resume text contains
 // Windows paths (C:\Users\...), LaTeX, or other backslash sequences. This tries
 // progressively more aggressive repairs before giving up.
+// Backend safety net — drop edits the AI returned but the system cannot
+// auto-apply. Better to omit a suggestion than ship one that fails to apply.
+//   EDIT     — "from" must appear in the resume text (whitespace-insensitive).
+//   DELETE   — "statement" must appear in the resume text.
+//   ADD      — when structured resume is provided: target must exist AND its
+//              bullet count must be below the limit (4 for experience, 3 for
+//              projects). When only plain text is available (guest flow):
+//              target.name must appear in the resume text.
+function filterApplicableEdits(edits, plainText, structured) {
+  if (!Array.isArray(edits)) return [];
+  const norm = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const normalizedText = norm(plainText);
+
+  const findEntry = (section, name) => {
+    if (!structured) return null;
+    const arr = section === "experience"
+      ? structured.experience
+      : section === "projects" ? structured.projects : null;
+    if (!Array.isArray(arr)) return null;
+    const normName = norm(name);
+    if (!normName) return null;
+    return arr.find((e) => {
+      const candidates = section === "experience" ? [e.company, e.role] : [e.name];
+      return candidates.some((c) => c && norm(c) === normName);
+    });
+  };
+
+  return edits.filter((edit) => {
+    if (!edit || typeof edit.type !== "string") return false;
+
+    if (edit.type === "EDIT") {
+      if (!edit.from || !edit.to) return false;
+      const nf = norm(edit.from);
+      return nf.length > 0 && normalizedText.includes(nf);
+    }
+
+    if (edit.type === "DELETE") {
+      if (!edit.statement) return false;
+      const ns = norm(edit.statement);
+      return ns.length > 0 && normalizedText.includes(ns);
+    }
+
+    if (edit.type === "ADD") {
+      if (!edit.statement || !edit.target || !edit.target.section || !edit.target.name) return false;
+      const section = edit.target.section;
+      if (section !== "experience" && section !== "projects") return false;
+
+      if (structured) {
+        // Strict: target entry must exist AND have headroom under the bullet cap.
+        const entry = findEntry(section, edit.target.name);
+        if (!entry) return false;
+        const bulletCount = Array.isArray(entry.points) ? entry.points.length : 0;
+        const limit = section === "experience" ? 4 : 3;
+        return bulletCount < limit;
+      }
+      // Loose (guest): target name must appear somewhere in the plain text.
+      const nn = norm(edit.target.name);
+      return nn.length > 0 && normalizedText.includes(nn);
+    }
+
+    return false;
+  });
+}
+
 function parseAiJson(raw) {
   // Pass 1 — direct parse
   try { return JSON.parse(raw); } catch {}
@@ -320,14 +385,24 @@ function parseAiJson(raw) {
   const fixedEscapes = raw.replace(/\\([^"\\/bfnrtu\n\r])/g, "\\\\$1");
   try { return JSON.parse(fixedEscapes); } catch {}
 
-  // Pass 3 — also close any unclosed brackets/braces
-  const stack = [];
+  // Pass 3 — repair truncation: if the response got cut mid-string, close the
+  // open string; then close any unclosed brackets/braces. Tracks string state
+  // so we don't treat braces inside strings as structural.
+  let inString = false;
+  let escaped  = false;
+  const stack  = [];
   for (const ch of fixedEscapes) {
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
     if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
     else if (ch === "}" || ch === "]") stack.pop();
   }
-  const closed = fixedEscapes + stack.reverse().join("");
-  return JSON.parse(closed); // throws if still broken, caught by caller
+  let repaired = fixedEscapes;
+  if (inString) repaired += '"';
+  repaired += stack.reverse().join("");
+  return JSON.parse(repaired); // throws if still broken, caught by caller
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -527,7 +602,7 @@ app.post("/api/analyze", (req, res, next) => {
   if (hasAuth) requireAuth(req, res, next);
   else guestRateLimit(req, res, next);
 }, async (req, res) => {
-  const { resumeText, jobInput, inputMode } = req.body || {};
+  const { resumeText, jobInput, inputMode, resumeStructured } = req.body || {};
   if (!resumeText || !jobInput) return res.status(400).json({ error: "Missing resumeText or jobInput" });
 
   // ── Atomic credit deduction before AI call (prevents race conditions) ─────
@@ -550,17 +625,28 @@ app.post("/api/analyze", (req, res, next) => {
 
   if (process.env.SKIP_AI === "true") {
     return res.json({
-      jobTitle: "Software Engineer",
+      jobTitle: "Senior Backend Engineer",
       company: "Mock Corp",
-      matchScore: 78,
-      matchLabel: "Medium Fit",
-      matchReasoning: "Strong backend experience but missing some cloud keywords listed in the job.",
-      keywordGaps: ["AWS Lambda", "Docker", "Kubernetes", "Terraform"],
-      skillsToHighlight: ["Node.js", "React", "PostgreSQL", "Microservices"],
+      fitLevel: "Moderate Fit",
+      summary: "Strong backend foundation with real production microservice experience. The biggest opportunities are surfacing Kubernetes/AWS work more prominently and adding concrete scale metrics. Two requirements (Snowflake, Terraform) are not present in the resume and cannot be honestly added.",
+      matchedRequirements: [
+        "Node.js + React production experience",
+        "PostgreSQL data modeling",
+        "Microservice architecture",
+      ],
+      optimizableGaps: [
+        "Kubernetes work present but buried inside bullets",
+        "AWS coverage exists but isn't surfaced at the top of relevant entries",
+        "Quantified impact missing from several recent entries",
+      ],
+      nonOptimizableGaps: [
+        "No Snowflake data warehouse experience anywhere in the resume",
+        "No Terraform / IaC work mentioned",
+      ],
       edits: [
-        { type: "ADD", statement: "Designed and deployed containerized microservices using Docker and Kubernetes on AWS EKS, achieving 99.9% uptime." },
-        { type: "EDIT", from: "Worked on backend services", to: "Engineered high-throughput backend services processing 10k+ requests/sec with Node.js and Express." },
-        { type: "DELETE", statement: "Basic knowledge of programming languages." },
+        { priority: "HIGH", reason: "Surfaces buried Kubernetes work that addresses the JD's container requirement.", type: "EDIT", from: "Worked on backend services", to: "Engineered high-throughput backend services on Node.js / Express handling 10k+ req/sec, deployed via Docker on AWS EKS." },
+        { priority: "MEDIUM", reason: "Adds explicit container orchestration coverage where the resume shows the underlying work.", type: "ADD", statement: "Designed and deployed containerized microservices using Docker and Kubernetes on AWS EKS, sustaining 99.9% uptime under production load.", target: { section: "experience", name: "Darwinbox" } },
+        { priority: "LOW", reason: "Removes weak filler that undermines senior positioning.", type: "DELETE", statement: "Basic knowledge of programming languages." },
       ],
       linkedinMessage: "Hi, I noticed your opening and would love to connect — my distributed systems background maps well to the role.",
       coldEmail: {
@@ -578,7 +664,7 @@ app.post("/api/analyze", (req, res, next) => {
     ? `JOB POSTING URL: ${jobInput}\n(Infer role and company from the URL context.)`
     : `JOB DESCRIPTION:\n${jobInput}`;
 
-  const prompt = `You are an expert job application coach and resume analyst.
+  const prompt = `You are an expert resume OPTIMIZATION coach.
 
 ${jobSection}
 
@@ -589,7 +675,16 @@ ${resumeText}
 TASK
 --------------------------------------------------
 
-Analyze how well the resume matches the job.
+You are NOT generating a score. You are helping the user UNDERSTAND and IMPROVE their resume for this specific role.
+
+Your job is to tell the user, clearly:
+  1. What the resume already covers
+  2. What can be improved through better wording, emphasis, or restructuring
+  3. What requirements they genuinely lack and cannot honestly add
+  4. The highest-value resume improvements to make
+
+Do NOT optimize for making a number go up.
+Optimize for producing the highest-quality, most honest resume guidance.
 
 Return ONLY a valid JSON object (no markdown, no explanations).
 
@@ -600,20 +695,28 @@ OUTPUT FORMAT
 {
   "jobTitle": "",
   "company": "",
-  "matchScore": number (0-100),
-  "matchLabel": "Strong Fit" | "Medium Fit" | "Weak Fit",
-  "matchReasoning": "2-3 concise sentences explaining the match",
+  "fitLevel": "Strong Fit" | "Moderate Fit" | "Weak Fit",
+  "summary": "2-3 sentences explaining the overall fit, the candidate's strongest alignments, and their biggest opportunities",
 
-  "keywordGaps": ["missing keywords or skills from the job (max 8)"],
-  "skillsToHighlight": ["relevant skills already present in resume (max 5)"],
+  "matchedRequirements": [
+    "specific JD requirements already covered by the resume (max 6)"
+  ],
+  "optimizableGaps": [
+    "gaps that can be improved through resume editing — wording, emphasis, or restructuring (max 6)"
+  ],
+  "nonOptimizableGaps": [
+    "requirements the candidate genuinely lacks based on resume evidence (max 6)"
+  ],
 
   "edits": [
     {
+      "priority": "HIGH" | "MEDIUM" | "LOW",
+      "reason": "1 sentence — why this edit matters for this role",
       "type": "ADD" | "EDIT" | "DELETE",
       "statement": "for ADD or DELETE",
       "target": {
         "section": "experience" | "projects",
-        "name": "exact company name (for experience) or project name (for projects) copied verbatim from the resume"
+        "name": "exact entry name copied verbatim from the resume"
       },
       "from": "ONLY for EDIT",
       "to": "ONLY for EDIT"
@@ -634,6 +737,60 @@ OUTPUT FORMAT
 }
 
 --------------------------------------------------
+FIT LEVEL RULES
+--------------------------------------------------
+
+- "Strong Fit": candidate satisfies MOST core requirements; gaps are minor or optional.
+- "Moderate Fit": candidate satisfies SOME important requirements but has meaningful gaps.
+- "Weak Fit": candidate lacks MULTIPLE core requirements.
+
+Do NOT use percentages anywhere.
+Do NOT generate numerical scores.
+Do NOT inflate fit level to make the user feel better.
+Be honest. A Weak Fit with great editing guidance is more valuable than a fake Moderate Fit.
+
+--------------------------------------------------
+GAP CATEGORIZATION (CRITICAL)
+--------------------------------------------------
+
+EVERY gap you identify must go into EXACTLY ONE of these two categories:
+
+OPTIMIZABLE GAPS — improvable through resume editing alone:
+  - The candidate did the work but it's buried, weakly worded, or missing keywords
+  - Examples:
+    * "Leadership work present but not emphasized"
+    * "ADR ownership mentioned once, should be highlighted"
+    * "gRPC experience buried inside a bullet — surface it"
+    * "Kubernetes used but not listed in skills"
+    * "Action verbs weak; quantified impact missing"
+
+NON-OPTIMIZABLE GAPS — the candidate genuinely lacks this:
+  - No evidence anywhere in the resume that they have this experience
+  - Examples:
+    * "No Snowflake experience in resume"
+    * "No Kotlin code anywhere"
+    * "No prior Staff or Principal title"
+    * "No ML / data science background"
+
+NEVER fabricate edits to fake non-optimizable gaps.
+NEVER move a non-optimizable gap to the optimizable list to soften the message.
+The user NEEDS to know what they genuinely lack — that's how they decide whether to apply.
+
+--------------------------------------------------
+EDIT PRIORITY RULES
+--------------------------------------------------
+
+- "HIGH": directly addresses a core JD requirement that lives in optimizableGaps.
+  This is what will most improve the resume's relevance.
+- "MEDIUM": improves visibility, ATS keyword coverage, or surfaces buried strengths.
+- "LOW": polish, clarity, or formatting only.
+
+Most edits should be HIGH or MEDIUM.
+Skip LOW edits unless they're meaningful — don't pad.
+Return ONLY edits that address optimizable gaps OR upgrade existing weak content.
+Never return an edit that pretends the candidate has experience they lack.
+
+--------------------------------------------------
 STRICT RULES
 --------------------------------------------------
 
@@ -642,114 +799,186 @@ STRICT RULES
 
 2. Do NOT hallucinate.
    - Use only information present in the resume.
-   - Do not invent experience, tools, or metrics.
+   - Do not invent experience, tools, metrics, or titles.
    - If unsure, leave fields empty or use "Unknown".
 
-3. Edits:
-   - Return 3–8 edits ONLY if meaningful improvements exist.
-   - Do NOT force ADD / EDIT / DELETE — include only necessary types.
-   - Skip edits if no real improvement can be made.
+3. Job title and company (CRITICAL):
+   - "jobTitle" MUST be a SHORT role title (typically 2-6 words).
+     Examples: "Senior Backend Engineer", "Staff Engineer, Platform", "Product Manager".
+   - Extract ONLY from explicit role markers near the top of the JD:
+       * A header line that visually looks like a title
+       * A label like "Role:", "Position:", "Job Title:" followed by the title
+       * The HTML <title> tag content (if present)
+   - DO NOT extract from sentences, descriptions, or body paragraphs.
+     If the candidate text starts with a VERB or pronoun ("Your work will...",
+     "You will...", "We are looking for...", "Build...", "Lead...", "Drive..."),
+     it is BODY COPY — NEVER a title. Do not extract it.
+   - If you cannot find a short, clean role title at the top of the JD,
+     set jobTitle to "Unknown Role". DO NOT GUESS, paraphrase, or grab a sentence.
+   - "company" follows the same rule: explicit company name only.
+     If unclear, use "Unknown Company".
 
-4. For EDIT and DELETE:
-   - "from" or "statement" MUST exactly match text from the resume.
-   - EDIT must significantly improve quality, not just rephrase.
+4. EDIT GENERATION POLICY (CRITICAL):
+   - ALWAYS prefer EDIT over ADD. ADDs should be RARE.
+   - Improvements via better wording, keywords, technology emphasis, architecture
+     clarification, leadership visibility, ATS keywords, and metrics are ALMOST
+     ALWAYS EDIT operations — not ADDs.
+   - Only generate ADD when there is GENUINELY no reasonable way to improve
+     an existing statement to cover the gap.
+   - Improving existing content beats adding more content.
+   - A concise resume with excellent bullets is better than a longer resume
+     padded with extra bullets. Avoid bloat.
+   - Do NOT force ADD / EDIT / DELETE — include only what's needed.
+   - Skip edits when no real improvement exists for an entry.
+   - Do NOT generate edits to fake non-optimizable gaps.
 
-5. For BOTH ADD and EDIT:
+5. BULLET COUNT HARD LIMITS:
+   - For any experience entry that ALREADY HAS 4 OR MORE bullet points:
+     NEVER generate an ADD for that experience. EDIT an existing bullet instead.
+   - For any project entry that ALREADY HAS 3 OR MORE bullet points:
+     NEVER generate an ADD for that project. EDIT an existing bullet instead.
+   - These are HARD limits. Count the bullets in the resume before deciding.
+
+6. APPLICABILITY RULES (CRITICAL — every edit MUST be auto-applicable):
+   For EDIT:
+   - "from" MUST exactly match text already in the resume — character for character.
+   - If an EXACT MATCH cannot be located in the resume text, DO NOT GENERATE the edit.
+   For DELETE:
+   - "statement" MUST exactly match text from the resume.
+   - If no exact match, DO NOT GENERATE.
+   For ADD:
+   - The target experience or project MUST already exist in the resume.
+   - "target.name" MUST exactly match an existing company name (for experience)
+     or project name (for projects) — character for character.
+   - If the target cannot be identified with certainty, DO NOT GENERATE the edit.
+
+   NEVER generate placeholder edits.
+   NEVER generate edits requiring the user to manually copy-paste because the
+   system cannot locate the target.
+   ONLY return edits the system can automatically apply. It is BETTER to OMIT
+   a suggestion than to produce one that cannot be applied.
+
+7. Statement quality (both ADD and EDIT):
    Each statement MUST:
    - Start with a strong action verb (Designed, Engineered, Built, Led, etc.)
    - Describe a system, feature, or problem (not generic tasks)
    - Include relevant technologies or architecture where appropriate
    - Include implementation detail (how it was done)
-   - End with clear, measurable impact (%, latency, scale, efficiency, etc.)
+   - End with clear, measurable impact where the resume already shows that work
 
-6. For ADD:
-   - Write complete, ATS-optimized, high-impact bullet points.
-   - Do not generate generic or filler content.
-   - ALWAYS include a "target" field specifying exactly where to insert the bullet:
-     - "section": "experience" if it belongs under a job role, "projects" if under a project.
-     - "name": copy the company name (for experience) or project name (for projects) EXACTLY
-       as it appears in the resume — do not paraphrase or abbreviate.
-   - Only target entries that already exist in the resume. Do not invent new entries.
+8. Per-edit "reason" (REQUIRED):
+   - One short sentence (under 100 chars).
+   - Plain English: why this edit matters for THIS specific job.
 
-7. Prioritize:
-   - High-impact improvements over minor wording changes
-   - Job-relevant keyword alignment
-   - Clarity + specificity + measurable outcomes
-
-8. Avoid:
+9. Avoid:
    - generic statements (e.g., "worked on", "responsible for")
    - vague impact (e.g., "improved performance" without metrics)
    - repetition or redundant edits
+   - any ADD to an entry that already has enough bullets (see rule 5)
+   - any edit that fabricates experience the candidate doesn't have
+   - any edit you can't guarantee will apply cleanly
+
+10. SUCCESS CRITERIA — the user must leave understanding:
+    1. WHY they are a Strong / Moderate / Weak fit
+    2. WHICH JD requirements are already covered (matchedRequirements)
+    3. WHICH gaps can be improved through editing (optimizableGaps)
+    4. WHICH gaps they cannot honestly address (nonOptimizableGaps)
+    5. The highest-value resume improvements to make (HIGH-priority edits)
 
 --------------------------------------------------
 LINKEDIN MESSAGE RULES
 --------------------------------------------------
 
-Generate a personalized LinkedIn connection request message:
+PERSPECTIVE — CRITICAL:
+- The message is written BY THE CANDIDATE (the person whose resume is above)
+  TO a potential recipient (recruiter, hiring manager, employee at the company).
+- Voice: FIRST PERSON. Use "I" and "my" for the candidate's experience.
+- The CANDIDATE is the SENDER. Never address the candidate by name.
+  The "Hi [First Name]," placeholder refers to the RECIPIENT — not the candidate.
+- BANNED phrasings (these flip the perspective the wrong way):
+    * "I'm impressed by your work at [Company in candidate's resume]"
+    * "Your background in X is interesting"
+    * Anything where "you" / "your" refers to the candidate
+  These are wrong because the candidate is the one writing, not being written to.
 
-- Maximum 300 characters
-- Start with: "Hi [First Name],"
-- Mention the specific role and company
-- Briefly align candidate's experience with the role (based ONLY on resume)
-- End with a soft ask (referral or quick chat)
-- Keep tone natural, human, and concise (not robotic or salesy)
+Structure:
+- Maximum 300 characters total.
+- Start with: "Hi [First Name]," — recipient's first name, NEVER the candidate's name.
+- Reference the specific job title and company (from the JD).
+- One sentence describing the candidate's relevant background (from resume) in
+  FIRST PERSON: "I built X at Y" or "My work on Z aligns with...".
+- End with a soft ask: a quick chat, advice on the role, or a referral.
+- Tone: natural, human, conversational — not robotic or salesy.
 
 Placeholders:
-- Use ONLY:
-  - [First Name] → recipient name
-- Do NOT use placeholders like [Your Name], [Company Name], etc.
-- Do NOT invent or guess recipient name
+- Use ONLY: [First Name] → the recipient's first name.
+- Do NOT use [Your Name], [Company Name], [Position], etc.
+- Do NOT invent or guess the recipient's actual name.
 
 Do NOT:
 - use generic templates
-- invent experience not present in resume
-- make the message overly long or salesy
+- invent experience not in the resume
+- use the candidate's own name in the greeting (they're the sender)
+- write in second-person voice about the candidate
 
 --------------------------------------------------
 COLD EMAIL RULES
 --------------------------------------------------
 
-Generate a professional cold email that works for ANY recipient — not just hiring teams.
-The recipient could be a recruiter, a hiring manager, a senior engineer, a team lead, or
-a mutual connection found on LinkedIn. Write it so it reads naturally regardless of who opens it.
+PERSPECTIVE — CRITICAL:
+- Written BY THE CANDIDATE TO a potential recipient (recruiter, hiring manager,
+  team lead, or mutual connection found on LinkedIn).
+- Voice: FIRST PERSON ("I", "my") when describing the candidate's work.
+- Never address the candidate by name. The "[Recipient Name]" placeholder refers
+  to the person being emailed.
+- BANNED: "Hi [Candidate's Name]," — that flips sender/recipient.
+- BANNED: any phrasing where "you" / "your" refers to the candidate's own
+  experience or company.
 
-- Subject line: specific and role-focused, no buzzwords
-- Greeting: ALWAYS use "Hi [Recipient Name]," — never "Hi Hiring Team,", "Dear Hiring Manager,",
-  "To Whom It May Concern," or any other assumed-role salutation
-- Opening: reference the specific role and company
-- Body: 2-3 sentences only — align candidate's relevant experience with the role (based ONLY on resume)
-- Closing: one soft ask — a brief call, coffee chat, or referral — keep it low-pressure
-- Sign-off: "Best," followed by a blank line (candidate fills their name)
-- Total length: 4-6 sentences maximum
+Structure:
+- Subject line: specific and role-focused, no buzzwords.
+- Greeting: ALWAYS "Hi [Recipient Name]," — never "Hi Hiring Team," / "Dear
+  Hiring Manager," / "To Whom It May Concern," / any assumed-role salutation.
+- Opening: reference the specific role and company.
+- Body: 2-3 sentences only, FIRST PERSON — what the candidate has built / shipped
+  that maps to the role (resume-only facts).
+- Closing: one soft ask — a brief call, coffee chat, or referral. Low pressure.
+- Sign-off: "Best," followed by a blank line. Candidate fills their own name.
+- Total length: 4-6 sentences maximum.
 
 Placeholders:
-- Use ONLY [Recipient Name] for the greeting
-- Do NOT use [Your Name], [Company Name], [Position], or any other placeholder
-- Do NOT invent or assume the recipient's name or role
+- Use ONLY [Recipient Name] for the greeting.
+- Do NOT use [Your Name], [Company Name], [Position], or any other placeholder.
+- Do NOT invent or assume the recipient's actual name or role.
 
 --------------------------------------------------
 COVER LETTER RULES
 --------------------------------------------------
 
-Generate a formal cover letter the candidate can attach or paste into an application form.
+PERSPECTIVE — CRITICAL:
+- Written BY THE CANDIDATE TO the hiring team / hiring manager at the company
+  in the JD. FIRST PERSON throughout ("I", "my", "I have").
+- The candidate is the author. Never address the candidate by name in the
+  greeting. The placeholder [Hiring Manager] is the RECIPIENT.
 
-- Subject line: "Application for [Role] at [Company]" — use the actual role and company
-- Greeting: "Dear [Hiring Manager]," — never assume a name
-- Structure: 3-4 paragraphs
-  - Paragraph 1: state interest in the specific role at the specific company; brief hook
+Structure:
+- Subject line: "Application for [Role] at [Company]" — use the actual role and company.
+- Greeting: "Dear [Hiring Manager]," — never assume a name.
+- 3-4 paragraphs:
+  - Paragraph 1: state the candidate's interest in the specific role and company; brief hook.
   - Paragraph 2: highlight 2-3 most relevant achievements or skills FROM THE RESUME ONLY
-    that align with the job's stated requirements
-  - Paragraph 3 (optional): connection to the company's stated mission, values, or product
-  - Final paragraph: confident close, invite a conversation
-- Sign-off: "Sincerely,\n[Your Name]"
-- Tone: professional but human, never stiff or generic
-- Length: 250-350 words
-- Use ONLY information present in the resume — never invent experience, metrics, or skills
+    that align with the JD's stated requirements. First person ("I built…", "I led…").
+  - Paragraph 3 (optional): connection to the company's mission, values, or product.
+  - Final paragraph: confident close, invite a conversation.
+- Sign-off: "Sincerely,\n[Your Name]" — [Your Name] is the CANDIDATE's name placeholder.
+- Tone: professional but human, never stiff or generic.
+- Length: 250-350 words.
+- Use ONLY information present in the resume — never invent experience, metrics, or skills.
 
 Placeholders allowed:
-- [Hiring Manager] in greeting
-- [Your Name] in sign-off
-- Do NOT use [Company Name], [Position], or any other placeholder — fill those from the JD
+- [Hiring Manager] in greeting (recipient)
+- [Your Name] in sign-off (candidate fills their own)
+- Do NOT use [Company Name], [Position], or any other placeholder — fill those from the JD.
 
 --------------------------------------------------
 QUALITY GUIDELINES
@@ -765,7 +994,8 @@ QUALITY GUIDELINES
     const message = await client.messages.create(
       {
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 2048,
+        max_tokens: 6144,
+        temperature: 0.3,
         messages: [{ role: "user", content: prompt }],
       },
       { timeout: 30_000 },
@@ -774,7 +1004,18 @@ QUALITY GUIDELINES
     let raw = message.content.map((b) => b.text || "").join("").replace(/```json|```/g, "").trim();
     const parsed = parseAiJson(raw);
 
-    // Log credit transaction and save analysis to history
+    // Safety net: drop any edits the AI returned that the system cannot
+    // automatically apply (missing 'from' text, missing target, over-bullet-cap).
+    if (Array.isArray(parsed.edits)) {
+      const before = parsed.edits.length;
+      parsed.edits = filterApplicableEdits(parsed.edits, resumeText, resumeStructured);
+      const dropped = before - parsed.edits.length;
+      if (dropped > 0) console.log(`filterApplicableEdits dropped ${dropped} of ${before} edits`);
+    }
+
+    // Log credit transaction and save analysis to history.
+    // match_label column stores fitLevel ("Strong Fit" / "Moderate Fit" / "Weak Fit").
+    // match_score column kept for backward-compat with legacy rows but written as 0 for new entries.
     if (req.user) {
       await query(
         "INSERT INTO credit_txns (user_id, delta, reason) VALUES ($1, -1, 'analysis')",
@@ -783,7 +1024,7 @@ QUALITY GUIDELINES
 
       await query(
         "INSERT INTO analysis_history (user_id, job_title, company, match_score, match_label, result) VALUES ($1, $2, $3, $4, $5, $6)",
-        [req.user.id, parsed.jobTitle || "", parsed.company || "", parsed.matchScore ?? 0, parsed.matchLabel || "", parsed]
+        [req.user.id, parsed.jobTitle || "", parsed.company || "", 0, parsed.fitLevel || "", parsed]
       ).catch((e) => console.error("History save error:", e.message));
     }
 

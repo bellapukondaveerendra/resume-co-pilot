@@ -104,14 +104,25 @@ function IconBtn({ children, onClick, tone = "ghost", title }) {
 function SectionCard({ title, subtitle, children, onAdd, addLabel }) {
   return (
     <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 14, padding: 20, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-        <div>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{title}</h3>
-          {subtitle && <p style={{ fontSize: 12, lineHeight: 1.6, color: "#6B7280" }}>{subtitle}</p>}
-        </div>
-        {onAdd && <IconBtn onClick={onAdd} tone="primary">{addLabel}</IconBtn>}
+      <div>
+        <h3 style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{title}</h3>
+        {subtitle && <p style={{ fontSize: 12, lineHeight: 1.6, color: "#6B7280" }}>{subtitle}</p>}
       </div>
       {children}
+      {onAdd && (
+        <button
+          type="button"
+          onClick={onAdd}
+          style={{
+            background: "transparent", border: "1.5px dashed #BFDBFE", color: "#2563EB",
+            borderRadius: 10, padding: "10px 16px", fontSize: 12, fontWeight: 700,
+            cursor: "pointer", fontFamily: "'Roboto', sans-serif", width: "100%",
+            letterSpacing: "0.03em",
+          }}
+        >
+          + {addLabel}
+        </button>
+      )}
     </div>
   );
 }
@@ -204,12 +215,7 @@ export default function ResumeEditor({ resume, onChange, isImported = false }) {
 
         {/* Links */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>Links</span>
-            <IconBtn onClick={() => set("basics", { ...resume.basics, links: [...resume.basics.links, { label: "", url: "" }] })}>
-              Add Link
-            </IconBtn>
-          </div>
+          <span style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6B7280" }}>Links</span>
           {resume.basics.links.map((l, i) => (
             <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr auto", gap: 10, alignItems: "end" }}>
               <Field label="Label" value={l.label} onChange={(v) => upLink(i, "label", v)} />
@@ -219,6 +225,18 @@ export default function ResumeEditor({ resume, onChange, isImported = false }) {
               </IconBtn>
             </div>
           ))}
+          <button
+            type="button"
+            onClick={() => set("basics", { ...resume.basics, links: [...resume.basics.links, { label: "", url: "" }] })}
+            style={{
+              background: "transparent", border: "1.5px dashed #BFDBFE", color: "#2563EB",
+              borderRadius: 10, padding: "10px 16px", fontSize: 12, fontWeight: 700,
+              cursor: "pointer", fontFamily: "'Roboto', sans-serif", width: "100%",
+              letterSpacing: "0.03em",
+            }}
+          >
+            + Add Link
+          </button>
         </div>
       </SectionCard>
 

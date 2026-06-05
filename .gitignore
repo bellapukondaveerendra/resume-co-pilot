@@ -16,3 +16,9 @@ frontend/.DS_Store
 frontend/.env
 frontend/.vscode/
 frontend/package-lock.json
+frontend/.env.production
+resumecopilot-key.pem
+
+# Personal resume PDFs / docx test artifacts at repo root
+*.pdf
+/resume_template*.docx

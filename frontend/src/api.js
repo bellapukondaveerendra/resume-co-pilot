@@ -41,8 +41,8 @@ export const api = {
     return data; // { text }
   },
 
-  analyze: (resumeText, jobInput, inputMode, token) =>
-    req("POST", "/analyze", { resumeText, jobInput, inputMode }, token),
+  analyze: (resumeText, jobInput, inputMode, token, resumeStructured = null) =>
+    req("POST", "/analyze", { resumeText, jobInput, inputMode, resumeStructured }, token),
 
   getResume: (token) => req("GET", "/resume", null, token),
 

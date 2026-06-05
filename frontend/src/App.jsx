@@ -189,17 +189,34 @@ function applyEditToResume(resume, edit) {
         (e) => matches(e.company, name) || matches(e.role, name)
       );
       if (!entry) return null;
+      // Already-applied check: same bullet already present? No-op success.
+      if (entry.points.some((p) => matches(p, edit.statement))) return resume;
       entry.points.push(edit.statement);
       return clone;
     }
     if (section === "projects") {
       const entry = clone.projects.find((p) => matches(p.name, name));
       if (!entry) return null;
+      if (entry.points.some((pt) => matches(pt, edit.statement))) return resume;
       entry.points.push(edit.statement);
       return clone;
     }
     return null;
   }
+
+  // Plain-text resume renders skills as one row per category:
+  //   "Category Name: item1, item2, item3"
+  // The AI may suggest EDIT/DELETE against these rows. Parse them back so we
+  // can mutate the structured skills[] array.
+  const parseSkillRow = (s) => {
+    if (!s) return null;
+    const ci = s.indexOf(":");
+    if (ci === -1) return null;
+    const category = s.substring(0, ci).trim();
+    const items = s.substring(ci + 1).split(",").map((x) => x.trim()).filter(Boolean);
+    if (!category || items.length === 0) return null;
+    return { category, items };
+  };
 
   if (edit.type === "EDIT") {
     for (const e of clone.experience) {
@@ -209,6 +226,36 @@ function applyEditToResume(resume, edit) {
     for (const p of clone.projects) {
       const i = p.points.findIndex((pt) => matches(pt, edit.from));
       if (i !== -1) { p.points[i] = edit.to; return clone; }
+    }
+    // Skill-row edit: "Category: a, b, c" → "Category: a, b, c, d"
+    const fromSkill = parseSkillRow(edit.from);
+    const toSkill   = parseSkillRow(edit.to);
+    if (fromSkill && toSkill) {
+      const idx = clone.skills.findIndex((s) => matches(s.category, fromSkill.category));
+      if (idx !== -1) {
+        clone.skills[idx] = {
+          category: toSkill.category || clone.skills[idx].category,
+          items:    toSkill.items,
+        };
+        return clone;
+      }
+    }
+    // "from" not found — check whether the TO text is already in the resume
+    // (edit was applied in a prior session, or this analysis is from History
+    // and the resume has been edited since). If so, treat as no-op success.
+    for (const e of resume.experience) {
+      if (e.points.some((p) => matches(p, edit.to))) return resume;
+    }
+    for (const p of resume.projects) {
+      if (p.points.some((pt) => matches(pt, edit.to))) return resume;
+    }
+    if (toSkill) {
+      const idx = resume.skills.findIndex((s) => matches(s.category, toSkill.category));
+      if (idx !== -1) {
+        const curr = (resume.skills[idx].items || []).map((x) => x.toLowerCase()).sort().join("|");
+        const want = toSkill.items.map((x) => x.toLowerCase()).sort().join("|");
+        if (curr === want) return resume;
+      }
     }
     return null;
   }
@@ -222,24 +269,66 @@ function applyEditToResume(resume, edit) {
       const i = p.points.findIndex((pt) => matches(pt, edit.statement));
       if (i !== -1) { p.points.splice(i, 1); return clone; }
     }
-    return null;
+    // Skill-row delete: "Category: a, b" → remove the whole category from skills[]
+    const delSkill = parseSkillRow(edit.statement);
+    if (delSkill) {
+      const idx = clone.skills.findIndex((s) => matches(s.category, delSkill.category));
+      if (idx !== -1) { clone.skills.splice(idx, 1); return clone; }
+    }
+    // Statement isn't anywhere in the resume — already deleted. No-op success.
+    return resume;
   }
 
   return null;
 }
 
 // ── Analysis UI components ────────────────────────────────────────────────────
-function ScorePill({ score, label }) {
-  const color = score >= 75 ? "#059669" : score >= 50 ? "#D97706" : "#DC2626";
+
+// Backward-compat shim: old analyses (matchScore-era) get massaged into the new
+// optimization-first shape so the new UI renders them without crashing.
+function normalizeAnalysis(a) {
+  if (!a || a.fitLevel) return a; // already in new shape (or null)
+  const labelMap = { "Strong Fit": "Strong Fit", "Medium Fit": "Moderate Fit", "Weak Fit": "Weak Fit" };
+  const fitFromScore = (s) =>
+    Number.isFinite(s) ? (s >= 75 ? "Strong Fit" : s >= 50 ? "Moderate Fit" : "Weak Fit") : "";
+  const priorityFromImpact = (i) =>
+    Number.isFinite(i) ? (i >= 7 ? "HIGH" : i >= 4 ? "MEDIUM" : "LOW") : "MEDIUM";
+  return {
+    ...a,
+    fitLevel:            labelMap[a.matchLabel] || fitFromScore(a.matchScore),
+    summary:             a.summary || a.matchReasoning || "",
+    matchedRequirements: a.matchedRequirements || a.skillsToHighlight || [],
+    optimizableGaps:     a.optimizableGaps || a.keywordGaps || [],
+    nonOptimizableGaps:  a.nonOptimizableGaps || [],
+    edits: (a.edits || []).map((e) => ({
+      ...e,
+      priority: e.priority || priorityFromImpact(e.impactScore),
+    })),
+  };
+}
+
+function fitLevelStyle(level) {
+  if (level === "Strong Fit")   return { color: "#059669", bg: "#ECFDF5", border: "#6EE7B7" };
+  if (level === "Moderate Fit") return { color: "#D97706", bg: "#FEF3C7", border: "#FDE68A" };
+  if (level === "Weak Fit")     return { color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" };
+  return                          { color: "#6B7280", bg: "#F3F4F6", border: "#E5E7EB" };
+}
+
+function FitBadge({ level }) {
+  const s = fitLevelStyle(level);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <span style={{ fontFamily: "'Space Mono',monospace", fontSize: 22, fontWeight: 700, color }}>{score}%</span>
-      <span style={{
-        fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase",
-        color, background: `${color}18`, padding: "3px 10px", borderRadius: 20, border: `1px solid ${color}33`,
-      }}>{label}</span>
-    </div>
+    <span style={{
+      fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase",
+      color: s.color, background: s.bg, padding: "5px 12px", borderRadius: 20,
+      border: `1px solid ${s.border}`, fontFamily: "'Roboto',sans-serif",
+    }}>{level || "Unknown Fit"}</span>
   );
+}
+
+function priorityStyle(p) {
+  if (p === "HIGH")   return { color: "#B91C1C", bg: "#FEE2E2", border: "#FCA5A5", label: "High Priority" };
+  if (p === "MEDIUM") return { color: "#B45309", bg: "#FEF3C7", border: "#FCD34D", label: "Medium Priority" };
+  return                { color: "#0369A1", bg: "#E0F2FE", border: "#7DD3FC", label: "Low Priority" };
 }
 
 function EditCard({ edit, onApply, applied, editorAvailable = true }) {
@@ -271,9 +360,22 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
   return (
     <div style={{ background: c.bg, border: "1px solid #E5E7EB", borderLeft: `3px solid ${c.border}`, borderRadius: 10, padding: "11px 13px", display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: c.badge, background: `${c.badge}1a`, padding: "3px 9px", borderRadius: 4, fontFamily: "'Space Mono',monospace", flexShrink: 0 }}>
-          {edit.type}
-        </span>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", color: c.badge, background: `${c.badge}1a`, padding: "3px 9px", borderRadius: 4, fontFamily: "'Space Mono',monospace", flexShrink: 0 }}>
+            {edit.type}
+          </span>
+          {edit.priority && (() => {
+            const p = priorityStyle(edit.priority);
+            return (
+              <span
+                title={edit.reason || ""}
+                style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", color: p.color, background: p.bg, border: `1px solid ${p.border}`, padding: "2px 8px", borderRadius: 4, fontFamily: "'Roboto',sans-serif", flexShrink: 0 }}
+              >
+                {p.label}
+              </span>
+            );
+          })()}
+        </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {canApply && !applied && !applyFailed && (
             <button
@@ -317,11 +419,18 @@ function EditCard({ edit, onApply, applied, editorAvailable = true }) {
         </div>
       )}
       {edit.type === "DELETE" && <p style={{ fontSize: 13, color: "#9CA3AF", lineHeight: 1.6, margin: 0, textDecoration: "line-through" }}>{edit.statement}</p>}
+
+      {edit.reason && (
+        <p style={{ fontSize: 11, color: "#6B7280", margin: 0, fontStyle: "italic", lineHeight: 1.5 }}>
+          Why: {edit.reason}
+        </p>
+      )}
     </div>
   );
 }
 
-function AnalysisInsights({ analysis, onReset, onApply, onApplyAll, onReAnalyze, appliedEdits = new Set(), editorAvailable = true }) {
+function AnalysisInsights({ analysis: rawAnalysis, onReset, onApply, onApplyAll, onGoPreview, appliedEdits = new Set(), editorAvailable = true }) {
+  const analysis = normalizeAnalysis(rawAnalysis);
   const unappliedApplicableCount = (analysis.edits || []).reduce((acc, e, i) => {
     if (appliedEdits.has(i)) return acc;
     const ok = e.type === "EDIT" || e.type === "DELETE" || (e.type === "ADD" && e.target);
@@ -329,37 +438,66 @@ function AnalysisInsights({ analysis, onReset, onApply, onApplyAll, onReAnalyze,
   }, 0);
   const hasApplied = appliedEdits.size > 0;
 
+  const renderChips = (items, palette) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+      {items.map((it, i) => (
+        <span key={i} style={{ fontSize: 11, fontFamily: "'Space Mono',monospace", color: palette.color, background: palette.bg, border: `1px solid ${palette.border}`, borderRadius: 3, padding: "3px 7px" }}>{it}</span>
+      ))}
+    </div>
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-        <div>
-          <p style={{ fontSize: 12, color: "#6B7280", marginBottom: 5 }}>{analysis.jobTitle} · {analysis.company}</p>
-          <ScorePill score={analysis.matchScore} label={analysis.matchLabel} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <p style={{ fontSize: 12, color: "#6B7280", margin: 0 }}>{analysis.jobTitle} · {analysis.company}</p>
+          <FitBadge level={analysis.fitLevel} />
         </div>
         <GhostBtn onClick={onReset} style={{ fontSize: 13, padding: "6px 14px", flexShrink: 0 }}>← New</GhostBtn>
       </div>
 
-      {editorAvailable && hasApplied && onReAnalyze && (
-        <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, padding: "11px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <p style={{ fontSize: 12, color: "#1E40AF", margin: 0, lineHeight: 1.5 }}>
-            You've applied {appliedEdits.size} {appliedEdits.size === 1 ? "edit" : "edits"}. See your new match score?
+      {editorAvailable && hasApplied && onGoPreview && (
+        <div style={{ background: "#ECFDF5", border: "1px solid #6EE7B7", borderRadius: 10, padding: "11px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <p style={{ fontSize: 12, color: "#065F46", margin: 0, lineHeight: 1.5, fontWeight: 600 }}>
+            {appliedEdits.size} {appliedEdits.size === 1 ? "edit" : "edits"} applied. Ready to preview your resume?
           </p>
-          <PrimaryBtn onClick={onReAnalyze} style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}>
-            Re-analyze →
+          <PrimaryBtn onClick={onGoPreview} style={{ fontSize: 12, padding: "6px 14px", flexShrink: 0 }}>
+            Preview Resume →
           </PrimaryBtn>
         </div>
       )}
 
-      <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.65, margin: 0 }}>{analysis.matchReasoning}</p>
+      {analysis.summary && (
+        <p style={{ fontSize: 12, color: "#374151", lineHeight: 1.65, margin: 0 }}>{analysis.summary}</p>
+      )}
 
-      {analysis.keywordGaps?.length > 0 && (
+      {analysis.matchedRequirements?.length > 0 && (
         <div>
-          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 6 }}>Keyword Gaps</p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {analysis.keywordGaps.map((kw, i) => (
-              <span key={i} style={{ fontSize: 11, fontFamily: "'Space Mono',monospace", color: "#DC2626", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 3, padding: "3px 7px" }}>{kw}</span>
-            ))}
-          </div>
+          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#059669", marginBottom: 6 }}>
+            ✓ Already Covered
+          </p>
+          {renderChips(analysis.matchedRequirements, { color: "#065F46", bg: "#ECFDF5", border: "#6EE7B7" })}
+        </div>
+      )}
+
+      {analysis.optimizableGaps?.length > 0 && (
+        <div>
+          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#B45309", marginBottom: 6 }}>
+            ✎ Can Be Improved
+          </p>
+          {renderChips(analysis.optimizableGaps, { color: "#92400E", bg: "#FEF3C7", border: "#FDE68A" })}
+        </div>
+      )}
+
+      {analysis.nonOptimizableGaps?.length > 0 && (
+        <div>
+          <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6B7280", marginBottom: 6 }}>
+            ✗ Not Present in Resume
+          </p>
+          {renderChips(analysis.nonOptimizableGaps, { color: "#4B5563", bg: "#F3F4F6", border: "#D1D5DB" })}
+          <p style={{ fontSize: 11, color: "#9CA3AF", marginTop: 6, lineHeight: 1.5, fontStyle: "italic" }}>
+            These can't honestly be added through editing — the resume lacks the underlying evidence.
+          </p>
         </div>
       )}
 
@@ -845,7 +983,7 @@ function GuestPage({ onBack, onSignUp }) {
           <div>
             <button onClick={resetToInput} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", fontFamily: "'Roboto',sans-serif", marginBottom: 8, padding: 0 }}>← New analysis</button>
             <p style={{ fontSize: 13, color: "#6B7280", marginBottom: 6 }}>{analysis.jobTitle} · {analysis.company}</p>
-            <ScorePill score={analysis.matchScore} label={analysis.matchLabel} />
+            <FitBadge level={normalizeAnalysis(analysis).fitLevel} />
           </div>
         </div>
         <div style={{ display: "flex", borderBottom: "1px solid #E5E7EB", marginBottom: 24 }}>
@@ -1354,7 +1492,18 @@ function HistoryPanel({ auth, onLoad }) {
     </div>
   );
 
-  const scoreColor = (s) => s >= 75 ? "#059669" : s >= 50 ? "#D97706" : "#DC2626";
+  // Derive fitLevel for any row — new rows store it in match_label directly;
+  // legacy rows may have "Medium Fit" or only a numeric match_score.
+  const rowFitLevel = (item) => {
+    if (item.match_label === "Strong Fit")   return "Strong Fit";
+    if (item.match_label === "Moderate Fit") return "Moderate Fit";
+    if (item.match_label === "Medium Fit")   return "Moderate Fit"; // legacy alias
+    if (item.match_label === "Weak Fit")     return "Weak Fit";
+    if (Number.isFinite(item.match_score) && item.match_score > 0) {
+      return item.match_score >= 75 ? "Strong Fit" : item.match_score >= 50 ? "Moderate Fit" : "Weak Fit";
+    }
+    return "";
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1379,12 +1528,18 @@ function HistoryPanel({ auth, onLoad }) {
               </p>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-              <span style={{
-                fontFamily: "'Space Mono',monospace", fontSize: 14, fontWeight: 700,
-                color: scoreColor(item.match_score),
-              }}>
-                {item.match_score}%
-              </span>
+              {(() => {
+                const lvl = rowFitLevel(item);
+                if (!lvl) return null;
+                const s = fitLevelStyle(lvl);
+                return (
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+                    color: s.color, background: s.bg, padding: "3px 8px", borderRadius: 12,
+                    border: `1px solid ${s.border}`, whiteSpace: "nowrap", fontFamily: "'Roboto',sans-serif",
+                  }}>{lvl.replace(" Fit", "")}</span>
+                );
+              })()}
               <button
                 onClick={(e) => handleDelete(e, item.id)}
                 style={{ background: "none", border: "none", color: "#D1D5DB", cursor: "pointer", fontSize: 16, padding: "2px 4px", lineHeight: 1 }}
@@ -1427,6 +1582,7 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
   }, []);
   const [showExportModal, setShowExportModal]   = useState(false);
   const [exportError, setExportError]           = useState("");
+  const [previewError, setPreviewError]         = useState("");
   const [copiedPlainText, setCopiedPlainText]   = useState(false);
   const copyPlainTextTimerRef                   = useRef(null);
 
@@ -1491,6 +1647,29 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
   const handleChange = (next) => setResume(next);
 
   const handleGoPreview = async () => {
+    // Block when any link has only one of {label, url} — empty pairs are fine
+    // (they get filtered on export), but half-filled ones leak into the DOCX.
+    const halfFilledLinks = (resume.basics?.links || [])
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => {
+        const hasLabel = !!(l?.label || "").trim();
+        const hasUrl   = !!(l?.url   || "").trim();
+        return (hasLabel && !hasUrl) || (!hasLabel && hasUrl);
+      });
+    if (halfFilledLinks.length > 0) {
+      const summary = halfFilledLinks
+        .map(({ l }) => {
+          const lab = (l?.label || "").trim();
+          const url = (l?.url   || "").trim();
+          if (lab && !url) return `“${lab}” is missing a URL`;
+          return `a link with URL “${url}” is missing a label`;
+        })
+        .join("; ");
+      setPreviewError(`Complete or remove these links before previewing: ${summary}.`);
+      return;
+    }
+    setPreviewError("");
+
     const cleaned = normalizeResume({
       ...resume,
       experience: resume.experience.map((e) => ({ ...e, points: e.points.filter((p) => p.trim()) })),
@@ -1545,7 +1724,10 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
     try {
       const text = resumeToPlainText(resume);
       if (!text.trim()) { setAnalysisError("Your resume is empty — fill in the editor first."); setAnalysisStep("idle"); return; }
-      const data = await api.analyze(text, jobInput.trim(), "paste", auth.token);
+
+      // Pass the structured resume so the backend safety net can enforce
+      // bullet-count caps on ADDs (guest flow leaves this null).
+      const data = await api.analyze(text, jobInput.trim(), "paste", auth.token, normalizeResume(resume));
       const { creditsRemaining, ...analysisData } = data;
       setAnalysis(analysisData); setAnalysisStep("results"); setAppliedEdits(new Set());
       if (onAnalysisComplete) onAnalysisComplete(creditsRemaining);
@@ -1682,6 +1864,13 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
             </div>
           )}
 
+          {previewError && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", background: "#FEF2F2", borderBottom: "1px solid #FECACA", flexShrink: 0 }}>
+              <span style={{ fontSize: 12, color: "#DC2626", flex: 1, lineHeight: 1.5 }}>{previewError}</span>
+              <button onClick={() => setPreviewError("")} style={{ background: "none", border: "none", color: "#FCA5A5", cursor: "pointer", fontSize: 16, padding: 0, flexShrink: 0, lineHeight: 1 }}>×</button>
+            </div>
+          )}
+
           <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
 
             {/* LEFT — Analysis + History */}
@@ -1745,7 +1934,7 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
                       onReset={() => { setAnalysis(null); setAnalysisStep("idle"); }}
                       onApply={handleApplyEdit}
                       onApplyAll={handleApplyAll}
-                      onReAnalyze={handleAnalyze}
+                      onGoPreview={handleGoPreview}
                       appliedEdits={appliedEdits}
                     />
                   )}
