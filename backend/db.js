@@ -13,17 +13,21 @@ export async function initSchema() {
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
-        id            SERIAL PRIMARY KEY,
-        email         TEXT UNIQUE NOT NULL,
-        hash          TEXT NOT NULL,
-        token_version INTEGER NOT NULL DEFAULT 0,
-        created_at    TIMESTAMPTZ DEFAULT NOW()
+        id                 SERIAL PRIMARY KEY,
+        email              TEXT UNIQUE NOT NULL,
+        hash               TEXT NOT NULL,
+        token_version      INTEGER NOT NULL DEFAULT 0,
+        email_verified_at  TIMESTAMPTZ,
+        created_at         TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 
-    // Migration: add token_version to pre-existing users tables
+    // Migrations for pre-existing users tables.
     await client.query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0`
+    );
+    await client.query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ`
     );
 
     await client.query(`
@@ -75,6 +79,17 @@ export async function initSchema() {
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS password_resets (
+        id         SERIAL PRIMARY KEY,
+        user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used       BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS email_verifications (
         id         SERIAL PRIMARY KEY,
         user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         token_hash TEXT UNIQUE NOT NULL,

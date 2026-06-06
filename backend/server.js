@@ -423,19 +423,62 @@ function parseAiJson(raw) {
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // Auth — register
+// Helper — issue a fresh verification token, store the hash, and send the email.
+// Returns true if sent (or if dev fallback logged), false on unrecoverable error.
+// Failures are non-blocking: the user can still use the app and request a resend.
+async function sendVerificationEmail(userId, email) {
+  try {
+    const token     = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
+
+    await query(
+      "INSERT INTO email_verifications (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+      [userId, tokenHash, expiresAt]
+    );
+
+    const appUrl    = process.env.APP_URL || "http://localhost:5173";
+    const verifyUrl = `${appUrl}/verify-email?token=${token}`;
+
+    if (resend) {
+      await resend.emails.send({
+        from: RESET_FROM,
+        to:   email,
+        subject: "Welcome to Resume CoPilot — verify your email",
+        html: `
+          <p>Hi,</p>
+          <p>Welcome to Resume CoPilot! Click the link below to verify your email and you're all set.</p>
+          <p><a href="${verifyUrl}">Verify my email</a></p>
+          <p>This link is valid for 24 hours.</p>
+          <p>While we're in beta, the app is fully free — unlimited resume analyses, outreach drafts, and exports.</p>
+          <p>If you didn't sign up for Resume CoPilot, you can safely ignore this email.</p>
+          <p>— Resume CoPilot</p>
+        `,
+      });
+    } else {
+      console.log(`[dev] Email verification link for ${email}: ${verifyUrl}`);
+    }
+    return true;
+  } catch (err) {
+    console.error("Verification email error:", err.message);
+    return false;
+  }
+}
+
 app.post("/api/auth/register", authLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: "Invalid email address" });
   if (password.length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
 
+  const normalizedEmail = email.toLowerCase().trim();
   const dbClient = await pool.connect();
   try {
     const hash = await bcrypt.hash(password, 10);
     await dbClient.query("BEGIN");
     const result = await dbClient.query(
       "INSERT INTO users (email, hash) VALUES ($1, $2) RETURNING id",
-      [email.toLowerCase().trim(), hash]
+      [normalizedEmail, hash]
     );
     const id = result.rows[0].id;
     await dbClient.query("INSERT INTO credits (user_id, balance) VALUES ($1, 5)", [id]);
@@ -449,12 +492,16 @@ app.post("/api/auth/register", authLimiter, async (req, res) => {
       [req.ip, GUEST_LIMIT]
     ).catch(() => {}); // non-critical
 
+    // Fire-and-forget verification email. We don't block signup on its delivery
+    // — the user gets a non-blocking banner + a resend button if it fails.
+    sendVerificationEmail(id, normalizedEmail).catch(() => {});
+
     const token = jwt.sign(
-      { id, email: email.toLowerCase().trim(), token_version: 0 },
+      { id, email: normalizedEmail, token_version: 0 },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
-    res.json({ token, user: { id, email: email.toLowerCase().trim() } });
+    res.json({ token, user: { id, email: normalizedEmail, email_verified: false } });
   } catch (err) {
     await dbClient.query("ROLLBACK");
     if (err.code === "23505") return res.status(409).json({ error: "Email already registered" });
@@ -480,7 +527,14 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
       JWT_SECRET,
       { expiresIn: "7d" }
     );
-    res.json({ token, user: { id: user.id, email: user.email } });
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        email_verified: !!user.email_verified_at,
+      },
+    });
   } catch (err) {
     console.error("Login error:", err.message);
     res.status(500).json({ error: "Login failed" });
@@ -586,6 +640,79 @@ app.post("/api/auth/reset-password", authLimiter, async (req, res) => {
     res.status(500).json({ error: "Password reset failed. Please try again." });
   } finally {
     dbClient.release();
+  }
+});
+
+// Auth — verify email (consume token, flip email_verified_at)
+// Uses GET so the email link can be clicked directly without a form.
+app.get("/api/auth/verify-email", async (req, res) => {
+  const { token } = req.query || {};
+  if (!token || typeof token !== "string") {
+    return res.status(400).json({ error: "Invalid or missing verification token", code: "INVALID" });
+  }
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query("BEGIN");
+    const r = await dbClient.query(
+      `SELECT id, user_id FROM email_verifications
+       WHERE token_hash = $1 AND used = FALSE AND expires_at > NOW()
+       FOR UPDATE`,
+      [tokenHash]
+    );
+    const row = r.rows[0];
+    if (!row) {
+      await dbClient.query("ROLLBACK");
+      // Distinguish "token doesn't exist / used / expired" — all map to the
+      // same user message but distinct codes help the frontend decide CTA.
+      return res.status(400).json({ error: "This verification link is invalid or has expired.", code: "EXPIRED" });
+    }
+    await dbClient.query(
+      "UPDATE users SET email_verified_at = NOW() WHERE id = $1 AND email_verified_at IS NULL",
+      [row.user_id]
+    );
+    await dbClient.query("UPDATE email_verifications SET used = TRUE WHERE id = $1", [row.id]);
+    await dbClient.query("COMMIT");
+    res.json({ ok: true });
+  } catch (err) {
+    await dbClient.query("ROLLBACK").catch(() => {});
+    console.error("Verify-email error:", err.message);
+    res.status(500).json({ error: "Verification failed. Please try again." });
+  } finally {
+    dbClient.release();
+  }
+});
+
+// Auth — resend the verification email (auth required, rate-limited).
+app.post("/api/auth/resend-verification", authLimiter, requireAuth, async (req, res) => {
+  try {
+    const u = await query("SELECT email, email_verified_at FROM users WHERE id = $1", [req.user.id]);
+    const row = u.rows[0];
+    if (!row) return res.status(404).json({ error: "Account not found" });
+    if (row.email_verified_at) return res.json({ ok: true, alreadyVerified: true });
+    await sendVerificationEmail(req.user.id, row.email);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Resend-verification error:", err.message);
+    res.status(500).json({ error: "Couldn't resend verification email. Please try again." });
+  }
+});
+
+// Auth — current user (lightweight; the frontend uses this to refresh
+// verification status after the user clicks the email link in another tab).
+app.get("/api/auth/me", requireAuth, async (req, res) => {
+  try {
+    const r = await query("SELECT id, email, email_verified_at FROM users WHERE id = $1", [req.user.id]);
+    const row = r.rows[0];
+    if (!row) return res.status(404).json({ error: "Account not found" });
+    res.json({
+      id: row.id,
+      email: row.email,
+      email_verified: !!row.email_verified_at,
+    });
+  } catch (err) {
+    console.error("/me error:", err.message);
+    res.status(500).json({ error: "Couldn't load account" });
   }
 });
 

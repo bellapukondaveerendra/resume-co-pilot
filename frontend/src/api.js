@@ -32,6 +32,15 @@ export const api = {
   resetPassword: (token, password) =>
     req("POST", "/auth/reset-password", { token, password }),
 
+  verifyEmail: (token) =>
+    req("GET", `/auth/verify-email?token=${encodeURIComponent(token)}`, null, null),
+
+  resendVerification: (token) =>
+    req("POST", "/auth/resend-verification", {}, token),
+
+  me: (token) =>
+    req("GET", "/auth/me", null, token),
+
   extract: async (file) => {
     const form = new FormData();
     form.append("file", file);

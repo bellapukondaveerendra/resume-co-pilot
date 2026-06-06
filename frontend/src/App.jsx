@@ -905,12 +905,16 @@ function JobInputForm({ onAnalyze, loading }) {
 }
 
 // ── Home page ─────────────────────────────────────────────────────────────────
-function HomePage({ onGuest, onLogin, auth, onGoEditor, onPricing }) {
+function HomePage({ onGuest, onLogin, onRegister, auth, onGoEditor, onPricing, appMode = "paid" }) {
+  // Guest mode is paid-mode-only. During the free beta we want every user to
+  // sign up so they're reachable when we flip to paid later.
+  const showGuestCard = !auth && appMode === "paid";
+  const singleColumn  = auth || appMode === "free";
   return (
     <div style={{ maxWidth: 680, margin: "0 auto", padding: "60px 20px 100px" }}>
       <div style={{ textAlign: "center", marginBottom: 48 }}>
-        <div style={{ display: "inline-block", fontFamily: "'Space Mono',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "#2563EB", background: "#EFF6FF", border: "1px solid #BFDBFE", padding: "4px 14px", borderRadius: 20, marginBottom: 18 }}>
-          AI Job Application Co-Pilot
+        <div style={{ display: "inline-block", fontFamily: "'Space Mono',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: appMode === "free" ? "#059669" : "#2563EB", background: appMode === "free" ? "#ECFDF5" : "#EFF6FF", border: `1px solid ${appMode === "free" ? "#6EE7B7" : "#BFDBFE"}`, padding: "4px 14px", borderRadius: 20, marginBottom: 18 }}>
+          {appMode === "free" ? "Free during beta" : "AI Job Application Co-Pilot"}
         </div>
         <h1 style={{ fontSize: "clamp(28px,4.5vw,44px)", fontWeight: 700, lineHeight: 1.15, marginBottom: 14, letterSpacing: "-0.02em", color: "#111827" }}>
           Land the job,<br /><span style={{ color: "#059669" }}>not just the interview.</span>
@@ -918,15 +922,17 @@ function HomePage({ onGuest, onLogin, auth, onGoEditor, onPricing }) {
         <p style={{ color: "#6B7280", fontSize: 15, lineHeight: 1.7, maxWidth: 440, margin: "0 auto 20px" }}>
           Instant resume analysis, keyword gap detection, tailored edits, and outreach messages — all from one paste.
         </p>
-        <button
-          onClick={onPricing}
-          style={{ background: "none", border: "none", color: "#2563EB", fontSize: 13, cursor: "pointer", fontFamily: "'Roboto',sans-serif", padding: 0, textDecoration: "underline", textDecorationColor: "#BFDBFE" }}
-        >
-          View pricing →
-        </button>
+        {appMode === "paid" && (
+          <button
+            onClick={onPricing}
+            style={{ background: "none", border: "none", color: "#2563EB", fontSize: 13, cursor: "pointer", fontFamily: "'Roboto',sans-serif", padding: 0, textDecoration: "underline", textDecorationColor: "#BFDBFE" }}
+          >
+            View pricing →
+          </button>
+        )}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: auth ? "1fr" : "1fr 1fr", gap: 16, maxWidth: auth ? 400 : "100%", margin: auth ? "0 auto" : undefined }}>
-        {!auth && (
+      <div style={{ display: "grid", gridTemplateColumns: singleColumn ? "1fr" : "1fr 1fr", gap: 16, maxWidth: singleColumn ? 400 : "100%", margin: singleColumn ? "0 auto" : undefined }}>
+        {showGuestCard && (
           <div onClick={onGuest} style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 24, cursor: "pointer", transition: "border-color 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }} onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#93C5FD")} onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#E5E7EB")}>
             <div style={{ fontSize: 28, marginBottom: 12 }}>🔍</div>
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: "#111827" }}>Analyze Resume</h2>
@@ -934,11 +940,16 @@ function HomePage({ onGuest, onLogin, auth, onGoEditor, onPricing }) {
             <span style={{ fontSize: 12, color: "#2563EB" }}>No account needed →</span>
           </div>
         )}
-        <div onClick={auth ? onGoEditor : onLogin} style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 24, cursor: "pointer", transition: "border-color 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }} onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#6EE7B7")} onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#E5E7EB")}>
+        <div
+          onClick={auth ? onGoEditor : (appMode === "free" && onRegister ? onRegister : onLogin)}
+          style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 24, cursor: "pointer", transition: "border-color 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#6EE7B7")}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#E5E7EB")}
+        >
           <div style={{ fontSize: 28, marginBottom: 12 }}>✏️</div>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: "#111827" }}>Build & Export Resume</h2>
           <p style={{ fontSize: 13, color: "#6B7280", lineHeight: 1.6, marginBottom: 16 }}>Fill a structured form, analyze against jobs, apply suggestions directly, preview, and export DOCX.</p>
-          <span style={{ fontSize: 12, color: "#059669" }}>{auth ? "Open editor →" : "Login required →"}</span>
+          <span style={{ fontSize: 12, color: "#059669" }}>{auth ? "Open editor →" : appMode === "free" ? "Sign up free →" : "Login required →"}</span>
         </div>
       </div>
     </div>
@@ -1186,6 +1197,111 @@ function ForgotPasswordPage({ onBack, onGoLogin }) {
 }
 
 // ── Reset Password page ──────────────────────────────────────────────────────
+// ── Verify Email page ────────────────────────────────────────────────────────
+function VerifyEmailPage({ auth, onGoHome, onGoEditor, onVerified }) {
+  const token = new URLSearchParams(window.location.search).get("token") || "";
+  const [state, setState] = useState(token ? "verifying" : "missing");
+  const [errorMsg, setErrorMsg] = useState("");
+  const ran = useRef(false);
+
+  useEffect(() => {
+    if (!token || ran.current) return;
+    ran.current = true;
+    api.verifyEmail(token)
+      .then(() => { setState("success"); if (onVerified) onVerified(); })
+      .catch((err) => { setState(err.code === "EXPIRED" ? "expired" : "error"); setErrorMsg(err.message || ""); });
+  }, [token, onVerified]);
+
+  return (
+    <div style={{ maxWidth: 440, margin: "0 auto", padding: "80px 20px", textAlign: "center" }}>
+      {state === "verifying" && (
+        <>
+          <div style={{ width: 56, height: 56, margin: "0 auto 20px", borderRadius: "50%", border: "2px solid #E5E7EB", borderTop: "2px solid #2563EB", animation: "spin 1s linear infinite" }} />
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#111827", marginBottom: 8 }}>Verifying your email…</h1>
+          <p style={{ color: "#6B7280", fontSize: 14 }}>One moment.</p>
+        </>
+      )}
+      {state === "success" && (
+        <>
+          <div style={{ width: 56, height: 56, borderRadius: "50%", background: "#ECFDF5", border: "2px solid #6EE7B7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, margin: "0 auto 18px" }}>✓</div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "#111827", marginBottom: 8 }}>Email verified</h1>
+          <p style={{ color: "#6B7280", fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>You're all set. Thanks for confirming.</p>
+          <PrimaryBtn onClick={auth ? onGoEditor : onGoHome}>{auth ? "Open editor →" : "Continue →"}</PrimaryBtn>
+        </>
+      )}
+      {state === "missing" && (
+        <>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#111827", marginBottom: 8 }}>No verification token</h1>
+          <p style={{ color: "#6B7280", fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>
+            Use the link in your verification email, or request a new one from the editor.
+          </p>
+          <PrimaryBtn onClick={onGoHome}>← Back to home</PrimaryBtn>
+        </>
+      )}
+      {(state === "expired" || state === "error") && (
+        <>
+          <div style={{ width: 56, height: 56, borderRadius: "50%", background: "#FEF2F2", border: "2px solid #FECACA", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, margin: "0 auto 18px" }}>✕</div>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: "#111827", marginBottom: 8 }}>
+            {state === "expired" ? "This link is invalid or has expired" : "Verification failed"}
+          </h1>
+          <p style={{ color: "#6B7280", fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>
+            {state === "expired"
+              ? "Verification links last 24 hours. Sign in and use the 'Resend verification' button in the banner to get a fresh one."
+              : (errorMsg || "Something went wrong. Please try again.")}
+          </p>
+          <PrimaryBtn onClick={onGoHome}>← Back to home</PrimaryBtn>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Email verification banner ───────────────────────────────────────────────
+// Non-dismissable nudge that appears on every authenticated page when the
+// user hasn't verified yet. Has a "Resend email" button with feedback.
+function EmailVerificationBanner({ auth, onResent }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg]   = useState("");
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const resend = async () => {
+    if (busy) return;
+    setBusy(true); setMsg("");
+    try {
+      const r = await api.resendVerification(auth.token);
+      if (r.alreadyVerified) {
+        setMsg("Already verified — refreshing…");
+        if (onResent) onResent();
+      } else {
+        setMsg("Sent. Check your inbox.");
+      }
+    } catch (e) {
+      setMsg(e.message || "Couldn't resend. Please try again.");
+    } finally {
+      setBusy(false);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setMsg(""), 4000);
+    }
+  };
+
+  return (
+    <div style={{ background: "#FEF3C7", borderBottom: "1px solid #FDE68A", padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "center", gap: 14, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 12, color: "#92400E", lineHeight: 1.5 }}>
+        ✉️ <strong>Verify your email</strong> — we sent a link to <code style={{ background: "#FEF3C7", padding: "1px 5px", borderRadius: 3 }}>{auth?.user?.email}</code>. Click it to confirm.
+      </span>
+      <button
+        onClick={resend}
+        disabled={busy}
+        style={{ background: "transparent", border: "1px solid #D97706", color: "#92400E", borderRadius: 6, padding: "3px 12px", fontSize: 11, fontWeight: 700, cursor: busy ? "not-allowed" : "pointer", fontFamily: "'Roboto',sans-serif", opacity: busy ? 0.6 : 1 }}
+      >
+        {busy ? "Sending…" : "Resend email"}
+      </button>
+      {msg && <span style={{ fontSize: 11, color: "#92400E", fontStyle: "italic" }}>{msg}</span>}
+    </div>
+  );
+}
+
 function ResetPasswordPage({ onGoLogin }) {
   const token = new URLSearchParams(window.location.search).get("token") || "";
   const [password, setPassword]   = useState("");
@@ -1681,6 +1797,18 @@ function EditorPage({ auth, appMode = "paid", creditBalance, onOpenBuyModal, onA
   const handleChange = (next) => setResume(next);
 
   const handleGoPreview = async () => {
+    // Block when the resume has no meaningful content yet — previewing an
+    // empty form just produces a blank page, which is more confusing than helpful.
+    const isEmpty =
+      !resume.basics.name &&
+      !resume.experience.length &&
+      !resume.projects.length &&
+      !resume.education.length;
+    if (isEmpty) {
+      setPreviewError("Your resume is empty — fill in at least your name and one section before previewing.");
+      return;
+    }
+
     // Block when any link has only one of {label, url} — empty pairs are fine
     // (they get filtered on export), but half-filled ones leak into the DOCX.
     const halfFilledLinks = (resume.basics?.links || [])
@@ -1904,6 +2032,24 @@ function EditorPage({ auth, appMode = "paid", creditBalance, onOpenBuyModal, onA
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", background: "#FEF2F2", borderBottom: "1px solid #FECACA", flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: "#DC2626", flex: 1, lineHeight: 1.5 }}>{previewError}</span>
               <button onClick={() => setPreviewError("")} style={{ background: "none", border: "none", color: "#FCA5A5", cursor: "pointer", fontSize: 16, padding: 0, flexShrink: 0, lineHeight: 1 }}>×</button>
+            </div>
+          )}
+
+          {/* Empty-state nudge: surfaces the Import option when the user
+              landed in the editor with nothing filled in (e.g., they clicked
+              "Start from Scratch" by mistake and now can't find their way
+              back to the import landing). */}
+          {!hasData() && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", background: "#EFF6FF", borderBottom: "1px solid #BFDBFE", flexShrink: 0 }}>
+              <span style={{ fontSize: 12, color: "#1E40AF", flex: 1, lineHeight: 1.5 }}>
+                Want to import an existing resume instead? It'll auto-fill every field.
+              </span>
+              <GhostBtn
+                onClick={() => setShowImportLanding(true)}
+                style={{ fontSize: 12, padding: "5px 12px", flexShrink: 0, borderColor: "#BFDBFE", color: "#2563EB" }}
+              >
+                ← Switch to import
+              </GhostBtn>
             </div>
           )}
 
@@ -2484,6 +2630,7 @@ export default function App() {
     if (path === "/forgot-password")  return "forgot-password";
     if (path === "/reset-password")   return "reset-password";
     if (path === "/account")          return "account";
+    if (path === "/verify-email")     return "verify-email";
     return "home";
   });
 
@@ -2523,6 +2670,29 @@ export default function App() {
     else setCreditBalance(null);
   }, [auth?.token]);
 
+  // Refresh email-verification status on boot — catches the case where the
+  // user verified in another tab / on another device since localStorage was
+  // last written. Also patches legacy auth blobs that don't have the field.
+  useEffect(() => {
+    if (!auth?.token) return;
+    api.me(auth.token)
+      .then((u) => {
+        if (u.email_verified !== auth.user?.email_verified) {
+          const next = { ...auth, user: { ...auth.user, email_verified: u.email_verified } };
+          setAuth(next); saveAuth(next);
+        }
+      })
+      .catch(() => { /* non-fatal — banner just stays until next reload */ });
+  }, [auth?.token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Called by VerifyEmailPage on successful /api/auth/verify-email — flips
+  // the in-memory auth flag immediately so the banner disappears.
+  const handleEmailVerified = () => {
+    if (!auth) return;
+    const next = { ...auth, user: { ...auth.user, email_verified: true } };
+    setAuth(next); saveAuth(next);
+  };
+
   // Sync page state with browser back/forward navigation
   useEffect(() => {
     const pathToPage = (path) => {
@@ -2536,6 +2706,7 @@ export default function App() {
       if (path === "/forgot-password") return "forgot-password";
       if (path === "/reset-password")  return "reset-password";
       if (path === "/account")         return "account";
+      if (path === "/verify-email")    return "verify-email";
       return "home";
     };
     const handlePop = () => setPage(pathToPage(window.location.pathname));
@@ -2630,10 +2801,18 @@ export default function App() {
           </div>
         </div>
 
+        {/* Email-verification nudge. Shows on every authed page until the
+            user clicks the link in their email. Suppressed on the verify
+            page itself (otherwise it'd look weird while we're verifying). */}
+        {auth && auth.user && !auth.user.email_verified && page !== "verify-email" && (
+          <EmailVerificationBanner auth={auth} onResent={handleEmailVerified} />
+        )}
+
         {/* Pages */}
         <div className="fade-in" key={page} style={{ flex: 1 }}>
-          {page === "home"    && <HomePage auth={auth} onGuest={() => setPage("guest")} onLogin={goLogin} onGoEditor={() => setPage("editor")} onPricing={() => navigate("pricing", "/pricing")} />}
-          {page === "guest"   && <GuestPage onBack={() => navigate("home")} onSignUp={goRegister} onAiUnavailable={() => setAiUnavailable(true)} />}
+          {page === "home"    && <HomePage auth={auth} appMode={appMode} onGuest={() => setPage("guest")} onLogin={goLogin} onRegister={goRegister} onGoEditor={() => setPage("editor")} onPricing={() => navigate("pricing", "/pricing")} />}
+          {page === "guest"   && appMode === "paid" && <GuestPage onBack={() => navigate("home")} onSignUp={goRegister} onAiUnavailable={() => setAiUnavailable(true)} />}
+          {page === "guest"   && appMode === "free" && <HomePage auth={auth} appMode={appMode} onGuest={() => setPage("guest")} onLogin={goLogin} onRegister={goRegister} onGoEditor={() => setPage("editor")} onPricing={() => navigate("pricing", "/pricing")} />}
           {page === "login"   && (
             <AuthPage
               mode={authMode}
@@ -2652,6 +2831,14 @@ export default function App() {
           {page === "reset-password" && (
             <ResetPasswordPage
               onGoLogin={() => { setAuthMode("login"); navigate("login"); }}
+            />
+          )}
+          {page === "verify-email" && (
+            <VerifyEmailPage
+              auth={auth}
+              onGoHome={() => navigate("home")}
+              onGoEditor={() => setPage("editor")}
+              onVerified={handleEmailVerified}
             />
           )}
           {page === "account" && auth && (
