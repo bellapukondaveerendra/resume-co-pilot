@@ -37,7 +37,22 @@ const stripe      = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIP
 const client      = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const upload      = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 const resend      = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-const RESET_FROM  = "Resume CoPilot <noreply@ashborntech.org>";
+// Sender address for transactional email. Must use a domain you've verified
+// in Resend. Override with RESEND_FROM in .env if you change domains later.
+const RESET_FROM  = process.env.RESEND_FROM || "Resume CoPilot <support@resumecopilot.in>";
+
+// App mode — when "free", credit gating is bypassed (analyses are unlimited
+// for logged-in users). Default is "paid" so forgetting to set it doesn't
+// accidentally ship a free version.
+const APP_MODE = process.env.APP_MODE === "F" ? "free" : "paid";
+
+// Kill switch for the Anthropic API. When false, /api/analyze short-circuits
+// with AI_UNAVAILABLE so users don't wait through long timeouts. Flip to
+// "false" the moment you know the AI provider is paused / out of budget;
+// flip back to "true" after topping up.
+const ANTHROPIC_ENABLED = process.env.ANTHROPIC_ENABLED !== "false";
+
+console.log(`Boot config — mode: ${APP_MODE}, anthropic: ${ANTHROPIC_ENABLED ? "on" : "off"}`);
 
 // ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -605,9 +620,18 @@ app.post("/api/analyze", (req, res, next) => {
   const { resumeText, jobInput, inputMode, resumeStructured } = req.body || {};
   if (!resumeText || !jobInput) return res.status(400).json({ error: "Missing resumeText or jobInput" });
 
+  // Kill switch — refuse before doing any work, including credit deduction.
+  if (!ANTHROPIC_ENABLED) {
+    return res.status(503).json({
+      error: "Our AI service is temporarily paused while we top up the budget. Your resume and past analyses are safe.",
+      code:  "AI_UNAVAILABLE",
+    });
+  }
+
   // ── Atomic credit deduction before AI call (prevents race conditions) ─────
+  // Skipped entirely in free mode — credit balance stays untouched, no txn logged.
   let creditsRemaining = null;
-  if (req.user) {
+  if (req.user && APP_MODE === "paid") {
     try {
       const deduct = await query(
         "UPDATE credits SET balance = balance - 1, updated_at = NOW() WHERE user_id = $1 AND balance > 0 RETURNING balance",
@@ -1016,11 +1040,14 @@ QUALITY GUIDELINES
     // Log credit transaction and save analysis to history.
     // match_label column stores fitLevel ("Strong Fit" / "Moderate Fit" / "Weak Fit").
     // match_score column kept for backward-compat with legacy rows but written as 0 for new entries.
+    // Credit txn is only logged in paid mode (creditsRemaining is null in free mode).
     if (req.user) {
-      await query(
-        "INSERT INTO credit_txns (user_id, delta, reason) VALUES ($1, -1, 'analysis')",
-        [req.user.id]
-      ).catch((e) => console.error("Credit txn log error:", e.message));
+      if (creditsRemaining !== null) {
+        await query(
+          "INSERT INTO credit_txns (user_id, delta, reason) VALUES ($1, -1, 'analysis')",
+          [req.user.id]
+        ).catch((e) => console.error("Credit txn log error:", e.message));
+      }
 
       await query(
         "INSERT INTO analysis_history (user_id, job_title, company, match_score, match_label, result) VALUES ($1, $2, $3, $4, $5, $6)",
@@ -1032,6 +1059,7 @@ QUALITY GUIDELINES
   } catch (err) {
     // Refund credit if the AI call failed after we already deducted.
     // If the refund itself fails, log it to failed_refunds for manual reconciliation.
+    // creditsRemaining is null in free mode, so this is a no-op there.
     if (req.user && creditsRemaining !== null) {
       await query(
         "UPDATE credits SET balance = balance + 1, updated_at = NOW() WHERE user_id = $1",
@@ -1045,6 +1073,24 @@ QUALITY GUIDELINES
       });
     }
     console.error("Analyze error:", err.message);
+
+    // Detect Anthropic provider unavailability (rate limit / overloaded / out of
+    // account credit). Surface as AI_UNAVAILABLE so the frontend can show the
+    // "AI service paused" modal instead of the generic failure message.
+    const aiStatus = err?.status;
+    const aiMsg    = String(err?.message || "").toLowerCase();
+    const aiType   = err?.error?.type || err?.error?.error?.type;
+    const isAiUnavailable =
+      aiStatus === 429 || aiStatus === 529 ||
+      aiType === "rate_limit_error" || aiType === "overloaded_error" ||
+      aiMsg.includes("credit balance") || aiMsg.includes("credit_balance");
+    if (isAiUnavailable) {
+      return res.status(503).json({
+        error: "Our AI service is temporarily paused while we top up the budget. Your resume and past analyses are safe.",
+        code:  "AI_UNAVAILABLE",
+      });
+    }
+
     const userMsg = err.message?.includes("timed out")
       ? "Analysis timed out — please try again."
       : "Analysis failed. Please try again in a moment.";
@@ -1354,6 +1400,9 @@ app.get("/api/credits/history", requireAuth, async (req, res) => {
 });
 
 app.post("/api/credits/checkout", requireAuth, async (req, res) => {
+  if (APP_MODE === "free") {
+    return res.status(503).json({ error: "Currently free — checkout disabled.", code: "FREE_MODE" });
+  }
   if (!stripe) return res.status(503).json({ error: "Stripe not configured" });
 
   const { package: pkg } = req.body || {};
@@ -1437,6 +1486,11 @@ app.delete("/api/analyses/:id", requireAuth, async (req, res) => {
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
+
+// ── Public app config ─────────────────────────────────────────────────────────
+// Frontend fetches this on boot so it can hide paid-flow UI when mode is free.
+
+app.get("/api/config", (_, res) => res.json({ mode: APP_MODE }));
 
 // ── SPA static serving (production) ───────────────────────────────────────────
 // When SERVE_STATIC=true, serve the built frontend and fall through to index.html

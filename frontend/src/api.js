@@ -98,4 +98,7 @@ export const api = {
 
   deleteAccount: (token) =>
     req("DELETE", "/account", null, token),
+
+  getAppConfig: () =>
+    req("GET", "/config", null, null),
 };

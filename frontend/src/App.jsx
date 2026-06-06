@@ -779,6 +779,38 @@ function BuyCreditsModal({ auth, onClose }) {
 }
 
 // ── CreditsBadge ──────────────────────────────────────────────────────────────
+// ── AiUnavailableModal ────────────────────────────────────────────────────────
+// Shown when the backend returns AI_UNAVAILABLE (Anthropic out of budget,
+// rate-limited, overloaded, or the ANTHROPIC_ENABLED kill switch is flipped).
+function AiUnavailableModal({ onClose }) {
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: 28, maxWidth: 460, width: "100%", display: "flex", flexDirection: "column", gap: 16, boxShadow: "0 20px 60px rgba(0,0,0,0.15)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 22 }}>⚠️</span>
+          <h3 style={{ fontSize: 17, fontWeight: 700, color: "#111827", margin: 0 }}>AI service paused</h3>
+        </div>
+        <p style={{ fontSize: 13, color: "#374151", lineHeight: 1.65, margin: 0 }}>
+          Heads up — we've hit our AI provider limit for now. This isn't a bug.
+          Our team is topping up the budget and the analyzer will be back shortly.
+        </p>
+        <p style={{ fontSize: 13, color: "#374151", lineHeight: 1.65, margin: 0 }}>
+          Your resume and any past analyses are safe.
+        </p>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <PrimaryBtn onClick={onClose} style={{ padding: "8px 22px", fontSize: 13 }}>Got it</PrimaryBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CreditsBadge({ balance, onOpenModal }) {
   if (balance === null) return null;
 
@@ -914,7 +946,7 @@ function HomePage({ onGuest, onLogin, auth, onGoEditor, onPricing }) {
 }
 
 // ── Guest page ────────────────────────────────────────────────────────────────
-function GuestPage({ onBack, onSignUp }) {
+function GuestPage({ onBack, onSignUp, onAiUnavailable }) {
   const [step, setStep]                     = useState("input");
   const [resumeMode, setResumeMode]         = useState("upload");
   const [resumeFile, setResumeFile]         = useState(null);
@@ -962,7 +994,9 @@ function GuestPage({ onBack, onSignUp }) {
       const data = await api.analyze(text, jobInput, inputMode, null);
       setAnalysis(data); setGuestTab("analysis"); setStep("results");
     } catch (err) {
-      if (err.code === "GUEST_LIMIT" || err.message?.includes("Guest limit")) {
+      if (err.code === "AI_UNAVAILABLE") {
+        if (onAiUnavailable) onAiUnavailable();
+      } else if (err.code === "GUEST_LIMIT" || err.message?.includes("Guest limit")) {
         setGuestLimitReached(true);
         if (err.limit) setGuestLimit(err.limit);
       } else {
@@ -1554,7 +1588,7 @@ function HistoryPanel({ auth, onLoad }) {
 }
 
 // ── Editor page — 3-stage flow ────────────────────────────────────────────────
-function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete }) {
+function EditorPage({ auth, appMode = "paid", creditBalance, onOpenBuyModal, onAnalysisComplete, onAiUnavailable }) {
   const [loadingResume, setLoadingResume]       = useState(true);
   const [stage, setStage]                       = useState("edit");
   const [showImportLanding, setShowImportLanding] = useState(false);
@@ -1732,7 +1766,9 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
       setAnalysis(analysisData); setAnalysisStep("results"); setAppliedEdits(new Set());
       if (onAnalysisComplete) onAnalysisComplete(creditsRemaining);
     } catch (err) {
-      if (err.code === "NO_CREDITS" || err.message?.includes("No credits")) {
+      if (err.code === "AI_UNAVAILABLE") {
+        if (onAiUnavailable) onAiUnavailable();
+      } else if (err.code === "NO_CREDITS" || err.message?.includes("No credits")) {
         if (onOpenBuyModal) onOpenBuyModal();
       } else {
         setAnalysisError(err.message);
@@ -1918,7 +1954,7 @@ function EditorPage({ auth, creditBalance, onOpenBuyModal, onAnalysisComplete })
                           Fill in your resume on the right before analyzing.
                         </p>
                       )}
-                      {creditBalance !== null && (
+                      {appMode === "paid" && creditBalance !== null && (
                         <p style={{ fontSize: 12, color: "#9CA3AF", margin: 0, textAlign: "center" }}>
                           ⚡ {creditBalance} credit{creditBalance === 1 ? "" : "s"} remaining
                         </p>
@@ -2089,6 +2125,57 @@ function ContactPage({ onBack }) {
 }
 
 // ── Pricing page ──────────────────────────────────────────────────────────────
+// ── FreeBetaPage ──────────────────────────────────────────────────────────────
+// Replaces PricingPage when APP_MODE=F. No buy cards, no per-credit math —
+// just a friendly "currently free during beta" landing.
+function FreeBetaPage({ auth, onSignUp, onGoEditor, onBack }) {
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", padding: "60px 24px 100px" }}>
+      <button onClick={onBack} style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", marginBottom: 32, fontFamily: "'Roboto',sans-serif", padding: 0 }}>← Back</button>
+      <div style={{ textAlign: "center", marginBottom: 36 }}>
+        <div style={{ display: "inline-block", fontFamily: "'Space Mono',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "#059669", background: "#ECFDF5", border: "1px solid #6EE7B7", padding: "4px 14px", borderRadius: 20, marginBottom: 18 }}>
+          Free during beta
+        </div>
+        <h1 style={{ fontSize: 30, fontWeight: 700, color: "#111827", marginBottom: 12 }}>Resume CoPilot is free right now</h1>
+        <p style={{ fontSize: 15, color: "#6B7280", lineHeight: 1.7, maxWidth: 460, margin: "0 auto" }}>
+          We're in beta. While we finalize payment setup, every account gets unlimited resume analyses, outreach drafts, and exports — at no cost.
+        </p>
+      </div>
+
+      <div style={{ background: "#FFFFFF", border: "1px solid #E5E7EB", borderRadius: 16, padding: "28px 32px", marginBottom: 24 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 16 }}>What's included</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {[
+            ["Unlimited match analyses", "Run as many resume-vs-job analyses as you like."],
+            ["Tailored suggestions",     "Exact edits to improve your resume for each role."],
+            ["Outreach messages",        "LinkedIn note, cold email, and cover letter drafts."],
+            ["DOCX export",              "Download your polished resume anytime."],
+          ].map(([title, desc]) => (
+            <div key={title} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <div style={{ width: 18, height: 18, background: "#D1FAE5", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+                <span style={{ fontSize: 10, color: "#059669" }}>✓</span>
+              </div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{title}</div>
+                <div style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.5 }}>{desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ textAlign: "center" }}>
+        <PrimaryBtn onClick={auth ? onGoEditor : onSignUp} style={{ padding: "12px 28px", fontSize: 14 }}>
+          {auth ? "Open editor →" : "Create a free account →"}
+        </PrimaryBtn>
+        <p style={{ fontSize: 12, color: "#9CA3AF", marginTop: 16 }}>
+          Pricing will roll out later — beta users will be notified before any change.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function PricingPage({ onBack, onSignUp, auth, onGoEditor }) {
   const [currencyData, setCurrencyData] = useState(null);
   const ctaHandler = auth ? onGoEditor : onSignUp;
@@ -2355,7 +2442,7 @@ function RefundPage({ onBack }) {
 }
 
 // ── Footer ────────────────────────────────────────────────────────────────────
-function Footer({ onNav }) {
+function Footer({ onNav, appMode = "paid" }) {
   const link = (label, page, url) => (
     <button
       onClick={() => { onNav(page, url); window.scrollTo(0, 0); }}
@@ -2371,11 +2458,11 @@ function Footer({ onNav }) {
       <div style={{ maxWidth: 900, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 14 }}>
         <span style={{ fontSize: 12, color: "#9CA3AF" }}>© 2026 Resume CoPilot · Ashborn Technologies</span>
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-          {link("Pricing",        "pricing", "/pricing")}
+          {appMode === "paid" && link("Pricing", "pricing", "/pricing")}
           {link("Contact",        "contact", "/contact")}
           {link("Privacy Policy", "privacy", "/privacy")}
           {link("Terms of Service","terms",  "/terms")}
-          {link("Refund Policy",  "refund",  "/refund")}
+          {appMode === "paid" && link("Refund Policy", "refund", "/refund")}
         </div>
       </div>
     </div>
@@ -2408,6 +2495,16 @@ export default function App() {
   const [authMode, setAuthMode] = useState("login");
   const [creditBalance, setCreditBalance] = useState(null);
   const [showBuyModal, setShowBuyModal]   = useState(false);
+  // App mode comes from backend /api/config. Default to "paid" until we know,
+  // so paid-mode UI doesn't flash off-then-on for free-mode users.
+  const [appMode, setAppMode]             = useState("paid");
+  const [aiUnavailable, setAiUnavailable] = useState(false);
+
+  useEffect(() => {
+    api.getAppConfig()
+      .then(({ mode }) => { if (mode === "free" || mode === "paid") setAppMode(mode); })
+      .catch(() => { /* fall back to paid default */ });
+  }, []);
 
   const fetchCredits = async (knownBalance) => {
     if (knownBalance !== undefined && knownBalance !== null) {
@@ -2475,8 +2572,12 @@ export default function App() {
         ${PREVIEW_CSS}
       `}</style>
 
-      {showBuyModal && auth && (
+      {showBuyModal && auth && appMode === "paid" && (
         <BuyCreditsModal auth={auth} onClose={() => setShowBuyModal(false)} />
+      )}
+
+      {aiUnavailable && (
+        <AiUnavailableModal onClose={() => setAiUnavailable(false)} />
       )}
 
       <div style={{ background: "#F8FAFC", minHeight: "100vh", color: "#111827", fontFamily: "'Roboto',sans-serif", display: "flex", flexDirection: "column" }}>
@@ -2488,15 +2589,19 @@ export default function App() {
             <span style={{ fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 14, color: "#111827" }}>Resume CoPilot</span>
           </button>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button
-              onClick={() => navigate("pricing", "/pricing")}
-              style={{ background: "none", border: "none", color: "#6B7280", cursor: "pointer", fontSize: 13, fontFamily: "'Roboto',sans-serif", padding: "4px 8px" }}
-            >
-              Pricing
-            </button>
+            {appMode === "paid" && (
+              <button
+                onClick={() => navigate("pricing", "/pricing")}
+                style={{ background: "none", border: "none", color: "#6B7280", cursor: "pointer", fontSize: 13, fontFamily: "'Roboto',sans-serif", padding: "4px 8px" }}
+              >
+                Pricing
+              </button>
+            )}
             {auth ? (
               <>
-                <CreditsBadge balance={creditBalance} onOpenModal={() => setShowBuyModal(true)} />
+                {appMode === "paid" && (
+                  <CreditsBadge balance={creditBalance} onOpenModal={() => setShowBuyModal(true)} />
+                )}
                 <button
                   onClick={() => navigate("account", "/account")}
                   title={`${auth.user?.email} — account settings`}
@@ -2528,7 +2633,7 @@ export default function App() {
         {/* Pages */}
         <div className="fade-in" key={page} style={{ flex: 1 }}>
           {page === "home"    && <HomePage auth={auth} onGuest={() => setPage("guest")} onLogin={goLogin} onGoEditor={() => setPage("editor")} onPricing={() => navigate("pricing", "/pricing")} />}
-          {page === "guest"   && <GuestPage onBack={() => navigate("home")} onSignUp={goRegister} />}
+          {page === "guest"   && <GuestPage onBack={() => navigate("home")} onSignUp={goRegister} onAiUnavailable={() => setAiUnavailable(true)} />}
           {page === "login"   && (
             <AuthPage
               mode={authMode}
@@ -2565,9 +2670,11 @@ export default function App() {
           {page === "editor"  && auth && (
             <EditorPage
               auth={auth}
+              appMode={appMode}
               creditBalance={creditBalance}
-              onOpenBuyModal={() => setShowBuyModal(true)}
+              onOpenBuyModal={() => { if (appMode === "paid") setShowBuyModal(true); }}
               onAnalysisComplete={fetchCredits}
+              onAiUnavailable={() => setAiUnavailable(true)}
             />
           )}
           {page === "editor"  && !auth && (
@@ -2586,7 +2693,7 @@ export default function App() {
           {page === "credits-cancel" && (
             <CreditsCancelPage onGoEditor={() => setPage(auth ? "editor" : "home")} />
           )}
-          {page === "pricing" && (
+          {page === "pricing" && appMode === "paid" && (
             <PricingPage
               onBack={() => navigate("home")}
               onSignUp={goRegister}
@@ -2594,13 +2701,22 @@ export default function App() {
               onGoEditor={() => setPage("editor")}
             />
           )}
+          {page === "pricing" && appMode === "free" && (
+            <FreeBetaPage
+              auth={auth}
+              onSignUp={goRegister}
+              onGoEditor={() => setPage("editor")}
+              onBack={() => navigate("home")}
+            />
+          )}
           {page === "contact" && <ContactPage onBack={() => navigate("home")} />}
           {page === "privacy" && <PrivacyPage onBack={() => navigate("home")} />}
           {page === "terms"   && <TermsPage   onBack={() => navigate("home")} />}
-          {page === "refund"  && <RefundPage  onBack={() => navigate("home")} />}
+          {page === "refund"  && appMode === "paid" && <RefundPage  onBack={() => navigate("home")} />}
+          {page === "refund"  && appMode === "free" && <FreeBetaPage auth={auth} onSignUp={goRegister} onGoEditor={() => setPage("editor")} onBack={() => navigate("home")} />}
         </div>
 
-        <Footer onNav={navigate} />
+        <Footer onNav={navigate} appMode={appMode} />
       </div>
     </ErrorBoundary>
   );
